@@ -39,3 +39,24 @@ python -m http.server 8000
 - 依存ライブラリなし（Vanilla HTML / CSS / JavaScript）
 - 保存先: `localStorage`（キー: `taskManagerApp.tasks`）
 - `localStorage` が使えない環境でもアプリ自体は動作します（保存のみ無効）
+
+## テスト
+
+Playwright による E2E テスト（17 ケース）を用意しています。
+
+```bash
+npm install
+npx playwright install chromium   # 初回のみ
+npm test
+```
+
+静的サーバーはテスト実行時に自動で起動・終了するため、事前起動は不要です。
+
+| コマンド | 内容 |
+| --- | --- |
+| `npm test` | 全テストを実行 |
+| `npm run test:ui` | Playwright UI モードで実行 |
+| `npm run test:report` | 直近の HTML レポートを表示 |
+| `npm start` | 静的サーバーのみ起動（http://127.0.0.1:8765） |
+
+テスト対象: 初期状態 / タスクの追加 / 完了状態の切り替え / フィルタ / 削除 / 永続化 / XSS 対策 / レスポンシブ / JS エラー検知
