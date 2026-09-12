@@ -1,5 +1,7 @@
 # タスク管理アプリ (Task Manager App)
 
+**デモ: https://simonwillker.github.io/task-manager-app/**
+
 バニラ JavaScript だけで動く、シンプルなタスク管理（ToDo）アプリです。
 ビルド不要・依存パッケージなしで、`index.html` をブラウザで開くだけで動作します。
 
@@ -60,3 +62,15 @@ npm test
 | `npm start` | 静的サーバーのみ起動（http://127.0.0.1:8765） |
 
 テスト対象: 初期状態 / タスクの追加 / 完了状態の切り替え / フィルタ / 削除 / 永続化 / XSS 対策 / レスポンシブ / JS エラー検知
+
+## デプロイ
+
+`main` ブランチへの push をトリガーに、GitHub Actions で GitHub Pages へ自動デプロイされます。
+
+1. E2E テスト（17 ケース）を実行
+2. **テストが成功した場合のみ** `index.html` / `style.css` / `script.js` を公開
+3. https://simonwillker.github.io/task-manager-app/ に反映
+
+Pull Request ではテストのみが実行され、デプロイは行われません。
+
+ワークフロー定義: [.github/workflows/deploy.yml](.github/workflows/deploy.yml)
