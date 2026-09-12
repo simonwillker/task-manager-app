@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>タスク管理アプリ</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>📝 タスク管理</h1>
+      <p class="subtitle">やることを整理しよう</p>
+    </header>
+
+    <form id="task-form" class="task-form">
+      <input
+        type="text"
+        id="task-input"
+        placeholder="新しいタスクを入力..."
+        autocomplete="off"
+        maxlength="200"
+      />
+      <button type="submit" class="btn btn-primary">追加</button>
+    </form>
+
+    <div class="toolbar">
+      <div class="filters" role="tablist">
+        <button class="filter-btn active" data-filter="all">すべて</button>
+        <button class="filter-btn" data-filter="active">未完了</button>
+        <button class="filter-btn" data-filter="completed">完了済み</button>
+      </div>
+      <button id="clear-completed" class="btn btn-ghost">完了済みを削除</button>
+    </div>
+
+    <ul id="task-list" class="task-list"></ul>
+
+    <p id="empty-state" class="empty-state" hidden>タスクはまだありません</p>
+
+    <footer class="app-footer">
+      <span id="task-count">0 件のタスク</span>
+    </footer>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
