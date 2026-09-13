@@ -1,5 +1,7 @@
 # タスク管理アプリ (Task Manager App)
 
+**公開 URL: https://simonwillker-task-manager.fly.dev/**
+
 バニラ JavaScript と Node.js で作った、シンプルなタスク管理（ToDo）Web アプリです。
 タスクはサーバーのデータベース（SQLite）に保存されるため、ログインすればどの端末・どのブラウザからでも同じタスクを使えます。
 実行時の依存パッケージはなく、Node.js だけで動きます。
@@ -33,13 +35,56 @@ npm start
 ローカルでは実際のメールは送信されず、確認メールや再設定メールの内容（リンク）がサーバーのログに出力されます。
 新規登録したら、ログに表示された `http://127.0.0.1:3000/#verify=...` を開いてください。
 
-## 本番環境に公開する
+## 本番環境に公開する（Fly.io）
 
-`compose.yaml` で、アプリと [Caddy](https://caddyserver.com/)（HTTPS 証明書を自動で取得・更新するリバースプロキシ）をまとめて起動できます。
+サーバーと DB が必要なため、静的ファイルしか配信できない GitHub Pages では動きません。[Fly.io](https://fly.io) で公開します。
 
-1. Docker が使えるサーバーを用意し、公開するドメインの DNS（A / AAAA レコード）をそのサーバーに向け、80 / 443 番ポートを開けます。
-2. [Resend](https://resend.com) でアカウントを作成し、送信元ドメインを認証して API キーを発行します。
-3. 設定ファイルを作ってデプロイします。
+`main` ブランチへの push をトリガーに、GitHub Actions（[.github/workflows/deploy.yml](.github/workflows/deploy.yml)）が次の順に実行します。
+
+1. E2E テスト
+2. Docker イメージをビルドし、本番設定で起動できるか確認
+3. **両方が成功した場合のみ** Fly.io へデプロイ（[fly.toml](fly.toml)）
+
+Pull Request では 1 と 2 だけが実行され、デプロイは行われません。
+
+### 初回セットアップ（1 回だけ）
+
+[flyctl](https://fly.io/docs/flyctl/install/) をインストールし、以下を実行します。Fly.io は従量課金です（小さなマシン 1 台と 1 GB のボリュームで、目安は月数ドル程度）。
+
+```bash
+# 1. アカウント作成（支払い方法の登録が必要）とログイン
+fly auth signup   # 既にアカウントがあれば fly auth login
+
+# 2. アプリと、DB を置くボリュームを作成（東京リージョン）
+fly apps create simonwillker-task-manager
+fly volumes create task_data --app simonwillker-task-manager --region nrt --size 1
+
+# 3. メール送信の設定（Resend で送信元ドメインを認証し、API キーを発行しておく）
+fly secrets set --app simonwillker-task-manager --stage \
+  RESEND_API_KEY=re_xxxxxxxx \
+  MAIL_FROM="Task Manager <no-reply@your-domain.example>"
+
+# 4. GitHub Actions 用のデプロイトークンを発行し、リポジトリの Secrets に登録
+fly tokens create deploy --app simonwillker-task-manager --expiry 8760h | gh secret set FLY_API_TOKEN
+```
+
+登録後、Actions 画面から「CI / Deploy to Fly.io」を **Run workflow** するか、`main` に push するとデプロイされます。
+`FLY_API_TOKEN` が未登録の間は、デプロイの手順だけが警告付きでスキップされます。
+
+アプリ名（`simonwillker-task-manager`）は Fly.io 全体で一意です。使えない場合は別の名前にし、`fly.toml` の `app` と `APP_BASE_URL`、ワークフローの `url` を合わせて変更してください。
+独自ドメインを使う場合は `fly certs add <ドメイン>` を実行し、`APP_BASE_URL` をそのドメインに変更します。
+
+### 運用
+
+- **ログ**: `fly logs --app simonwillker-task-manager`（メール送信の失敗もここに出ます）
+- **状態確認**: `fly status --app simonwillker-task-manager`、ヘルスチェックは `GET /api/health`
+- **バックアップ**: Fly.io がボリュームのスナップショットを毎日自動で取得します（`fly volumes snapshots list <ボリューム ID>`）。手元にコピーする場合は `fly ssh console --app simonwillker-task-manager -C "node -e \"new (require('node:sqlite').DatabaseSync)('/data/tasks.db').exec(\\\"VACUUM INTO '/data/backup.db'\\\")\""` の後に `fly ssh sftp get /data/backup.db --app simonwillker-task-manager`
+- **更新**: `main` にマージすると自動でデプロイされます。DB のスキーマ変更は起動時に自動で適用されます。
+- **スケール**: 回数制限の記録はプロセスのメモリ上にあり、SQLite もボリューム 1 つに置くため、マシンは 1 台で動かす前提です（`--ha=false`）。アクセスが無いときはマシンが停止し、次のアクセスで数秒かけて起動します。
+
+### 自前のサーバーで動かす場合（Docker Compose）
+
+Fly.io を使わない場合は、`compose.yaml` でアプリと [Caddy](https://caddyserver.com/)（HTTPS 証明書を自動で取得・更新するリバースプロキシ）をまとめて起動できます。
 
 ```bash
 cp .env.example .env
@@ -47,16 +92,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-`https://<DOMAIN>` でアクセスできます。Docker 以外の環境（PaaS など）で動かす場合は、下の環境変数を設定して `node server/index.js` を起動してください。
-
-### 運用
-
-- **データの保存場所**: DB は Docker ボリューム `app-data`（コンテナ内の `/data/tasks.db`）に保存されます。コンテナを作り直しても消えません。
-- **バックアップ**: `docker compose exec app node -e "const {DatabaseSync}=require('node:sqlite');new DatabaseSync('/data/tasks.db').exec(\"VACUUM INTO '/data/backup.db'\")"` で整合性のとれたコピーを作成し、`docker compose cp app:/data/backup.db ./backup.db` で取り出せます。
-- **更新**: `git pull` の後に `docker compose up -d --build`。DB のスキーマ変更は起動時に自動で適用されます。
-- **ログ**: `docker compose logs -f app`（メール送信の失敗もここに出ます）
-- **ヘルスチェック**: `GET /api/health`
-- **スケール**: 回数制限の記録はプロセスのメモリ上にあり、SQLite もファイル 1 つのため、アプリは 1 コンテナで動かす前提です。
+公開するドメインの DNS をサーバーに向け、80 / 443 番ポートを開けておいてください。DB は Docker ボリューム `app-data` に保存されます。
 
 ### 環境変数
 
@@ -64,18 +100,19 @@ docker compose up -d --build
 | --- | --- | --- |
 | `NODE_ENV` | — | `production` にすると、下の「本番で必須」の設定が無い場合に起動を中止します |
 | `PORT` | `3000` | 待ち受けポート |
-| `HOST` | `127.0.0.1` | 待ち受けアドレス。サーバーやコンテナで公開するときは `0.0.0.0` |
-| `DB_PATH` | `data/tasks.db` | SQLite データベースファイルのパス（ディレクトリは自動作成） |
+| `HOST` | `127.0.0.1` | 待ち受けアドレス。サーバーやコンテナで公開するときは `0.0.0.0`（Docker イメージでは設定済み） |
+| `DB_PATH` | `data/tasks.db` | SQLite データベースファイルのパス（Docker イメージでは `/data/tasks.db`） |
 | `APP_BASE_URL` | `http://127.0.0.1:<PORT>` | メール内リンクに使う公開 URL。**本番で必須（https）** |
 | `SECURE_COOKIES` | `false` | HTTPS で配信するとき `true`（Cookie に `Secure`、HSTS ヘッダーを付与）。**本番で必須** |
-| `TRUST_PROXY` | `false` | リバースプロキシの後ろで動かすとき `true`（`X-Forwarded-For` からクライアントの IP を取得） |
+| `CLIENT_IP_HEADER` | — | プロキシがクライアントの IP を入れるヘッダー名（Fly.io では `fly-client-ip`）。`TRUST_PROXY` より優先 |
+| `TRUST_PROXY` | `false` | リバースプロキシの後ろで動かすとき `true`（`X-Forwarded-For` の末尾からクライアントの IP を取得） |
 | `MAIL_TRANSPORT` | `console` | `console`（ログに出力）/ `file`（JSON ファイルに保存、テスト用）/ `resend`。**本番では `resend` が必須** |
 | `MAIL_FROM` | `Task Manager <no-reply@example.com>` | 送信元アドレス（Resend で認証したドメイン） |
 | `RESEND_API_KEY` | — | Resend の API キー（`MAIL_TRANSPORT=resend` のとき必須） |
 | `MAIL_OUTBOX_DIR` | `data/mail-outbox` | `MAIL_TRANSPORT=file` のときの保存先 |
 | `AUTH_RATE_LIMIT_PER_IP` | `60` | 認証系 API への IP アドレスごとのリクエスト上限（15 分あたり） |
 
-`TRUST_PROXY=true` は、アプリに直接アクセスできず必ずプロキシを経由する構成でだけ指定してください（直接アクセスできると IP アドレスを偽装されます）。
+`CLIENT_IP_HEADER` / `TRUST_PROXY` は、アプリに直接アクセスできず必ずプロキシを経由する構成でだけ指定してください（直接アクセスできると IP アドレスを偽装されます）。
 
 ## 構成
 
@@ -90,7 +127,9 @@ docker compose up -d --build
 | `server/db.js` | SQLite の接続とマイグレーション |
 | `server/mailer.js` | メール送信（console / file / resend） |
 | `server/rate-limit.js` | 回数制限 |
-| `Dockerfile` / `compose.yaml` / `Caddyfile` / `.env.example` | 本番公開用の設定 |
+| `Dockerfile` | 本番用のコンテナイメージ |
+| `fly.toml` / `.github/workflows/deploy.yml` | Fly.io の設定と、CI / 自動デプロイ |
+| `compose.yaml` / `Caddyfile` / `.env.example` | 自前のサーバーで動かす場合の設定 |
 
 ## API
 
@@ -134,7 +173,7 @@ docker compose up -d --build
 
 ## テスト
 
-Playwright による E2E テスト（43 ケース）を用意しています。
+Playwright による E2E テスト（44 ケース）を用意しています。
 
 ```bash
 npm install

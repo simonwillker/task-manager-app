@@ -32,6 +32,8 @@ function loadConfig(env = process.env) {
     secureCookies: env.SECURE_COOKIES === "true",
     // リバースプロキシの後ろで動かすとき true（X-Forwarded-For からクライアントの IP を取る）
     trustProxy: env.TRUST_PROXY === "true",
+    // プロキシがクライアントの IP を入れるヘッダー名（Fly.io なら fly-client-ip）。TRUST_PROXY より優先する
+    clientIpHeader: (env.CLIENT_IP_HEADER || "").trim().toLowerCase(),
     authRateLimitPerIp: positiveInt("AUTH_RATE_LIMIT_PER_IP", 60, env),
     mail: {
       transport: env.MAIL_TRANSPORT || "console",

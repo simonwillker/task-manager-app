@@ -362,6 +362,43 @@ test.describe("回数制限", () => {
     expect((await requestReset()).status()).toBe(429);
   });
 
+  test("CLIENT_IP_HEADER（Fly.io の Fly-Client-IP）の IP アドレスごとに回数を数える", async () => {
+    const http = require("http");
+    const { openDatabase } = require("../server/db");
+    const { createApp } = require("../server/app");
+
+    const server = http.createServer(
+      createApp({
+        db: openDatabase(":memory:"),
+        publicDir: path.join(__dirname, "..", "public"),
+        mailer: { send: async () => {} },
+        appBaseUrl: "http://127.0.0.1",
+        clientIpHeader: "fly-client-ip",
+        authRateLimitPerIp: 2,
+      })
+    );
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(undefined)));
+    const address = /** @type {import("net").AddressInfo} */ (server.address());
+    const loginFrom = async (ip) => {
+      const res = await fetch(`http://127.0.0.1:${address.port}/api/login`, {
+        method: "POST",
+        headers: { ...API_HEADERS, "Content-Type": "application/json", "Fly-Client-IP": ip },
+        body: JSON.stringify({ email: uniqueEmail(), password: "wrong-password" }),
+      });
+      return res.status;
+    };
+
+    try {
+      expect(await loginFrom("198.51.100.1")).toBe(401);
+      expect(await loginFrom("198.51.100.1")).toBe(401);
+      expect(await loginFrom("198.51.100.1")).toBe(429);
+      // 同じ接続元（127.0.0.1）でも、ヘッダーの IP が違えば別に数える
+      expect(await loginFrom("198.51.100.2")).toBe(401);
+    } finally {
+      server.close();
+    }
+  });
+
   test("RateLimiter は上限に達するとウィンドウが終わるまで拒否する", () => {
     const limiter = new RateLimiter({ max: 2, windowMs: 1000 });
 

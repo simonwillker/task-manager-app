@@ -24,6 +24,7 @@ const server = http.createServer(
     appBaseUrl: config.appBaseUrl,
     secureCookies: config.secureCookies,
     trustProxy: config.trustProxy,
+    clientIpHeader: config.clientIpHeader,
     authRateLimitPerIp: config.authRateLimitPerIp,
   })
 );

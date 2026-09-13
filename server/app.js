@@ -185,6 +185,7 @@ function toPublicUser(row) {
  *   appBaseUrl: string,
  *   secureCookies?: boolean,
  *   trustProxy?: boolean,
+ *   clientIpHeader?: string,
  *   authRateLimitPerIp?: number,
  * }} options
  */
@@ -195,6 +196,7 @@ function createApp({
   appBaseUrl,
   secureCookies = false,
   trustProxy = false,
+  clientIpHeader = "",
   authRateLimitPerIp = 60,
 }) {
   const rootDir = path.resolve(publicDir);
@@ -283,6 +285,10 @@ function createApp({
   // ---- 回数制限 ----
 
   function clientIp(req) {
+    if (clientIpHeader) {
+      const value = req.headers[clientIpHeader];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
     if (trustProxy) {
       // リバースプロキシが末尾に追加した値を使う（先頭側はクライアントが偽装できる）
       const forwarded = String(req.headers["x-forwarded-for"] || "")
