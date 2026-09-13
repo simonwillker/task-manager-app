@@ -72,8 +72,9 @@ body {
   margin-bottom: 16px;
 }
 
-#task-input {
+.text-input {
   flex: 1;
+  min-width: 0;
   padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -82,9 +83,118 @@ body {
   font-size: 0.95rem;
 }
 
-#task-input:focus {
+.text-input:focus {
   outline: 2px solid var(--primary);
   outline-offset: 1px;
+}
+
+/* ---- ログイン / 新規登録 ---- */
+
+.auth-tabs {
+  margin-bottom: 16px;
+}
+
+.auth-tabs .filter-btn {
+  flex: 1;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.field-hint {
+  margin: -4px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.form-error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.auth-form .form-error {
+  margin: 0;
+}
+
+.form-notice {
+  margin: 0 0 16px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: rgba(22, 163, 74, 0.1);
+  color: var(--success);
+  font-size: 0.85rem;
+}
+
+.form-notice[data-kind="error"] {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+}
+
+.view-title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.view-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.view-text strong {
+  color: var(--text);
+}
+
+.link-btn {
+  align-self: center;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.user-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.user-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .btn {

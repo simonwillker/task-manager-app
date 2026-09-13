@@ -1,0 +1,17 @@
+.git
+.github
+.claude
+.vscode
+.idea
+.env
+.env.*
+node_modules
+data
+tests
+test-results
+playwright-report
+blob-report
+*.db
+*.db-shm
+*.db-wal
+*.log

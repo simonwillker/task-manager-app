@@ -1,0 +1,43 @@
+# 本番用の構成例: アプリ + Caddy（HTTPS 証明書を自動で取得・更新するリバースプロキシ）
+#
+#   cp .env.example .env   # DOMAIN やメール送信の設定を書き換える
+#   docker compose up -d --build
+#
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_BASE_URL: https://${DOMAIN:?DOMAIN を .env に設定してください}
+      SECURE_COOKIES: "true"
+      # Caddy の後ろで動くので、X-Forwarded-For からクライアントの IP を取る
+      TRUST_PROXY: "true"
+    volumes:
+      - app-data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  # タスクのデータベース。バックアップ対象
+  app-data:
+  # Caddy が取得した証明書
+  caddy-data:
+  caddy-config:

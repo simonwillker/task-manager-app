@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>タスク管理アプリ</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>📝 タスク管理</h1>
+      <p class="subtitle">やることを整理しよう</p>
+    </header>
+
+    <p id="notice" class="form-notice" role="status" hidden></p>
+
+    <p id="loading" class="empty-state">読み込み中...</p>
+
+    <!-- ログイン / 新規登録 -->
+    <section id="auth-view" hidden>
+      <div class="filters auth-tabs" role="tablist">
+        <button type="button" class="filter-btn active" data-mode="login">ログイン</button>
+        <button type="button" class="filter-btn" data-mode="register">新規登録</button>
+      </div>
+
+      <form id="auth-form" class="auth-form">
+        <label class="field">
+          <span>メールアドレス</span>
+          <input type="email" id="auth-email" class="text-input" autocomplete="email" maxlength="254" required />
+        </label>
+        <label class="field">
+          <span>パスワード</span>
+          <input type="password" id="auth-password" class="text-input" autocomplete="current-password" maxlength="128" required />
+        </label>
+        <p id="auth-hint" class="field-hint" hidden>8 文字以上で入力してください</p>
+        <p id="auth-error" class="form-error" role="alert" hidden></p>
+        <button type="submit" id="auth-submit" class="btn btn-primary">ログイン</button>
+        <button type="button" id="forgot-link" class="link-btn">パスワードを忘れた場合</button>
+      </form>
+    </section>
+
+    <!-- パスワード再設定メールの送信 -->
+    <section id="forgot-view" hidden>
+      <form id="forgot-form" class="auth-form">
+        <h2 class="view-title">パスワードの再設定</h2>
+        <p class="view-text">登録したメールアドレスを入力してください。パスワード再設定用のリンクをお送りします。</p>
+        <label class="field">
+          <span>メールアドレス</span>
+          <input type="email" id="forgot-email" class="text-input" autocomplete="email" maxlength="254" required />
+        </label>
+        <p id="forgot-error" class="form-error" role="alert" hidden></p>
+        <button type="submit" id="forgot-submit" class="btn btn-primary">再設定メールを送る</button>
+        <button type="button" class="link-btn" data-back-to-login>ログイン画面に戻る</button>
+      </form>
+    </section>
+
+    <!-- 新しいパスワードの設定（メールのリンクから開く） -->
+    <section id="reset-view" hidden>
+      <form id="reset-form" class="auth-form">
+        <h2 class="view-title">新しいパスワードの設定</h2>
+        <label class="field">
+          <span>新しいパスワード</span>
+          <input type="password" id="reset-password" class="text-input" autocomplete="new-password" minlength="8" maxlength="128" required />
+        </label>
+        <p class="field-hint">8 文字以上で入力してください</p>
+        <p id="reset-error" class="form-error" role="alert" hidden></p>
+        <button type="submit" id="reset-submit" class="btn btn-primary">パスワードを変更する</button>
+        <button type="button" class="link-btn" data-back-to-login>ログイン画面に戻る</button>
+      </form>
+    </section>
+
+    <!-- メールアドレスの確認待ち -->
+    <section id="verify-view" hidden>
+      <div class="auth-form">
+        <h2 class="view-title">メールアドレスを確認してください</h2>
+        <p class="view-text"><strong id="verify-email"></strong> に確認メールを送信しました。メール内のリンクを開くと、タスク管理を使い始められます。</p>
+        <p id="verify-error" class="form-error" role="alert" hidden></p>
+        <button type="button" id="verify-resend" class="btn btn-primary">確認メールを再送する</button>
+        <button type="button" class="link-btn" data-logout>別のアカウントでログインする</button>
+      </div>
+    </section>
+
+    <!-- タスク -->
+    <section id="task-view" hidden>
+      <div class="user-bar">
+        <span id="user-email" class="user-email"></span>
+        <button type="button" class="btn btn-ghost" data-logout>ログアウト</button>
+      </div>
+
+      <form id="task-form" class="task-form">
+        <input
+          type="text"
+          id="task-input"
+          class="text-input"
+          placeholder="新しいタスクを入力..."
+          autocomplete="off"
+          maxlength="200"
+        />
+        <button type="submit" class="btn btn-primary">追加</button>
+      </form>
+
+      <p id="task-error" class="form-error" role="alert" hidden></p>
+
+      <div class="toolbar">
+        <div class="filters" role="tablist">
+          <button class="filter-btn active" data-filter="all">すべて</button>
+          <button class="filter-btn" data-filter="active">未完了</button>
+          <button class="filter-btn" data-filter="completed">完了済み</button>
+        </div>
+        <button id="clear-completed" class="btn btn-ghost">完了済みを削除</button>
+      </div>
+
+      <ul id="task-list" class="task-list"></ul>
+
+      <p id="empty-state" class="empty-state" hidden>タスクはまだありません</p>
+
+      <footer class="app-footer">
+        <span id="task-count">0 件のタスク</span>
+      </footer>
+    </section>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: CI / Deploy to Fly.io
 
 on:
   push:
@@ -7,16 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# GITHUB_TOKEN に Pages へのデプロイ権限を与える
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# 実行中のデプロイは中断せず、キューは最新の 1 件のみ残す
+# PR では古い実行を中断する。main へのデプロイは中断しない
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -27,7 +24,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # node:sqlite を使うため Node.js 22.13 以上が必要
+          node-version: 24
           cache: npm
 
       - name: 依存関係をインストール
@@ -47,35 +45,69 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  build:
-    name: サイトをビルド
-    # テスト成功時のみ、かつ main への push でのみデプロイする
-    needs: test
-    if: github.event_name != 'pull_request'
+  docker:
+    name: Docker イメージの起動確認
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/configure-pages@v5
+      - name: イメージをビルド
+        run: docker build -t task-manager-app .
 
-      - name: 公開ファイルを収集
-        # 静的アプリのため、公開に必要なファイルのみを _site へ集める
+      - name: 本番設定で起動し、ヘルスチェックが通るか確認
         run: |
-          mkdir -p _site
-          cp index.html style.css script.js _site/
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
+          docker run -d --name app -p 3000:3000 \
+            -e APP_BASE_URL=https://example.com \
+            -e SECURE_COOKIES=true \
+            -e MAIL_TRANSPORT=resend \
+            -e RESEND_API_KEY=re_dummy \
+            task-manager-app
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/api/health; then
+              echo
+              # root 以外のユーザーでもボリュームに DB を作成できていること
+              docker exec app test -f /data/tasks.db
+              echo "DB file created in /data"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs app
+          exit 1
 
   deploy:
-    name: デプロイ
-    needs: build
+    name: Fly.io へデプロイ
+    # テストとイメージ確認が成功し、main へ push されたときだけデプロイする
+    needs: [test, docker]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      name: production
+      url: https://simonwillker-task-manager.fly.dev
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
-      - name: GitHub Pages へデプロイ
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+
+      - name: デプロイ用トークンの確認
+        id: token
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::warning title=デプロイをスキップしました::リポジトリの Secrets に FLY_API_TOKEN がありません。README の「本番環境に公開する」の手順で設定してください。"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.token.outputs.available == 'true'
+
+      - name: デプロイ
+        if: steps.token.outputs.available == 'true'
+        # SQLite はボリューム 1 つに置くため、マシンは 1 台だけにする
+        run: flyctl deploy --remote-only --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
