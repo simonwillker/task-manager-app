@@ -16,10 +16,11 @@ module.exports = defineConfig({
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
   ],
-  // テスト実行前に静的サーバーを自動で起動・終了する
+  // テスト実行前にアプリサーバーを自動で起動・終了する（DB はメモリ上に作るので実データに影響しない）
   webServer: {
-    command: "node tests/static-server.js",
-    url: `http://127.0.0.1:${PORT}`,
-    reuseExistingServer: !process.env.CI,
+    command: "node server/index.js",
+    url: `http://127.0.0.1:${PORT}/`,
+    reuseExistingServer: false,
+    env: { PORT: String(PORT), HOST: "127.0.0.1", DB_PATH: ":memory:" },
   },
 });

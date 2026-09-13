@@ -11,6 +11,12 @@ node_modules/
 dist/
 build/
 
+# Database
+data/
+*.db
+*.db-shm
+*.db-wal
+
 # Logs
 *.log
 npm-debug.log*
