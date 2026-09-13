@@ -4,17 +4,31 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { promisify } = require("util");
+const { RateLimiter } = require("./rate-limit");
 
 const scrypt = promisify(crypto.scrypt);
 
 const SESSION_COOKIE = "sid";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 日
+const VERIFY_EMAIL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 時間
+const RESET_PASSWORD_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 時間
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_TASK_LENGTH = 200;
 const MAX_IMPORT_TASKS = 1000;
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 128;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const MINUTE = 60 * 1000;
+/** ログイン・登録などの API（IP アドレスごとの回数制限の対象） */
+const AUTH_PATHS = new Set([
+  "/api/register",
+  "/api/login",
+  "/api/verify-email",
+  "/api/verify-email/resend",
+  "/api/password-reset/request",
+  "/api/password-reset/confirm",
+]);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -27,11 +41,17 @@ const MIME = {
 };
 
 class HttpError extends Error {
-  constructor(status, message) {
+  /** @param {{ code?: string, retryAfterSeconds?: number }} [extra] */
+  constructor(status, message, extra = {}) {
     super(message);
     this.status = status;
+    this.code = extra.code;
+    this.retryAfterSeconds = extra.retryAfterSeconds;
   }
 }
+
+const invalidRequest = () => new HttpError(400, "リクエストの形式が正しくありません");
+const invalidLink = () => new HttpError(400, "リンクが無効か、有効期限が切れています。もう一度やり直してください");
 
 async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
@@ -48,6 +68,10 @@ async function verifyPassword(password, stored) {
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function randomToken() {
+  return crypto.randomBytes(32).toString("base64url");
 }
 
 function parseCookies(header = "") {
@@ -78,15 +102,6 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
-function setSecurityHeaders(res) {
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-  );
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Referrer-Policy", "same-origin");
-}
-
 async function readJson(req) {
   const chunks = [];
   let size = 0;
@@ -102,19 +117,41 @@ async function readJson(req) {
   } catch {
     // 下で 400 を返す
   }
-  throw new HttpError(400, "リクエストの形式が正しくありません");
+  throw invalidRequest();
 }
 
-function parseCredentials(body) {
-  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-  const password = typeof body.password === "string" ? body.password : "";
+function parseEmail(value) {
+  const email = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (!EMAIL_RE.test(email) || email.length > 254) {
     throw new HttpError(400, "メールアドレスの形式が正しくありません");
   }
+  return email;
+}
+
+function parseCredentials(body) {
+  const email = parseEmail(body.email);
+  const password = typeof body.password === "string" ? body.password : "";
   if (!password || password.length > MAX_PASSWORD_LENGTH) {
     throw new HttpError(400, "パスワードを入力してください");
   }
   return { email, password };
+}
+
+/** 新しく設定するパスワードの長さを確認する */
+function parseNewPassword(value) {
+  const password = typeof value === "string" ? value : "";
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new HttpError(400, `パスワードは ${MIN_PASSWORD_LENGTH} 文字以上にしてください`);
+  }
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    throw new HttpError(400, `パスワードは ${MAX_PASSWORD_LENGTH} 文字以内にしてください`);
+  }
+  return password;
+}
+
+function parseToken(value) {
+  if (typeof value !== "string" || !value || value.length > 100) throw invalidLink();
+  return value;
 }
 
 function parseTaskText(value) {
@@ -135,26 +172,79 @@ function toTask(row) {
   };
 }
 
+function toPublicUser(row) {
+  return { email: row.email, emailVerified: row.email_verified_at !== null };
+}
+
 /**
  * HTTP リクエストハンドラーを作成する。
- * @param {{ db: import("node:sqlite").DatabaseSync, publicDir: string, secureCookies?: boolean }} options
+ * @param {{
+ *   db: import("node:sqlite").DatabaseSync,
+ *   publicDir: string,
+ *   mailer: { send(message: { to: string, subject: string, text: string }): Promise<void> },
+ *   appBaseUrl: string,
+ *   secureCookies?: boolean,
+ *   trustProxy?: boolean,
+ *   authRateLimitPerIp?: number,
+ * }} options
  */
-function createApp({ db, publicDir, secureCookies = false }) {
+function createApp({
+  db,
+  publicDir,
+  mailer,
+  appBaseUrl,
+  secureCookies = false,
+  trustProxy = false,
+  authRateLimitPerIp = 60,
+}) {
   const rootDir = path.resolve(publicDir);
   // 存在しないユーザーでもパスワード照合と同じ時間をかけ、登録有無を推測されにくくする
-  const dummyHashPromise = hashPassword(crypto.randomBytes(16).toString("hex"));
+  const dummyHashPromise = hashPassword(randomToken());
+
+  const limiters = {
+    // 登録・ログインなど認証系 API へのリクエスト数（IP アドレスごと）
+    authPerIp: new RateLimiter({ max: authRateLimitPerIp, windowMs: 15 * MINUTE }),
+    // ログインの失敗回数（IP アドレス + メールアドレスごと）
+    loginFailures: new RateLimiter({ max: 5, windowMs: 15 * MINUTE }),
+    // 確認メール・再設定メールの送信回数（大量送信の防止）
+    verifyEmails: new RateLimiter({ max: 3, windowMs: 60 * MINUTE }),
+    resetEmails: new RateLimiter({ max: 3, windowMs: 60 * MINUTE }),
+  };
+  setInterval(() => Object.values(limiters).forEach((limiter) => limiter.prune()), MINUTE).unref();
 
   const stmts = {
     insertUser: db.prepare("INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)"),
-    findUserByEmail: db.prepare("SELECT id, email, password_hash FROM users WHERE email = ?"),
+    findUserById: db.prepare("SELECT id, email, email_verified_at FROM users WHERE id = ?"),
+    findUserByEmail: db.prepare(
+      "SELECT id, email, password_hash, email_verified_at FROM users WHERE email = ?"
+    ),
+    markEmailVerified: db.prepare(
+      "UPDATE users SET email_verified_at = ? WHERE id = ? AND email_verified_at IS NULL"
+    ),
+    updatePassword: db.prepare("UPDATE users SET password_hash = ? WHERE id = ?"),
+
     insertSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)"),
     findSessionUser: db.prepare(`
-      SELECT users.id, users.email FROM sessions
+      SELECT users.id, users.email, users.email_verified_at FROM sessions
       JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?
     `),
     deleteSession: db.prepare("DELETE FROM sessions WHERE token_hash = ?"),
+    deleteUserSessions: db.prepare("DELETE FROM sessions WHERE user_id = ?"),
     deleteExpiredSessions: db.prepare("DELETE FROM sessions WHERE expires_at <= ?"),
+
+    insertEmailToken: db.prepare(
+      "INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)"
+    ),
+    findEmailToken: db.prepare(`
+      SELECT users.id, users.email FROM email_tokens
+      JOIN users ON users.id = email_tokens.user_id
+      WHERE email_tokens.token_hash = ? AND email_tokens.purpose = ? AND email_tokens.expires_at > ?
+    `),
+    deleteEmailTokens: db.prepare("DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?"),
+    deleteAllEmailTokens: db.prepare("DELETE FROM email_tokens WHERE user_id = ?"),
+    deleteExpiredEmailTokens: db.prepare("DELETE FROM email_tokens WHERE expires_at <= ?"),
+
     listTasks: db.prepare(`
       SELECT id, text, completed, created_at FROM tasks
       WHERE user_id = ? ORDER BY created_at DESC, rowid DESC
@@ -167,6 +257,56 @@ function createApp({ db, publicDir, secureCookies = false }) {
     deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ?"),
     deleteCompletedTasks: db.prepare("DELETE FROM tasks WHERE user_id = ? AND completed = 1"),
   };
+
+  function transaction(fn) {
+    db.exec("BEGIN");
+    try {
+      const result = fn();
+      db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  function setSecurityHeaders(res) {
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    );
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "same-origin");
+    if (secureCookies) res.setHeader("Strict-Transport-Security", "max-age=31536000");
+  }
+
+  // ---- 回数制限 ----
+
+  function clientIp(req) {
+    if (trustProxy) {
+      // リバースプロキシが末尾に追加した値を使う（先頭側はクライアントが偽装できる）
+      const forwarded = String(req.headers["x-forwarded-for"] || "")
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (forwarded.length > 0) return forwarded[forwarded.length - 1];
+    }
+    return req.socket.remoteAddress || "unknown";
+  }
+
+  /** 回数制限に達していたら 429 を返す */
+  function enforceLimit(limiter, key) {
+    const ms = limiter.retryAfterMs(key);
+    if (ms > 0) {
+      throw new HttpError(
+        429,
+        `試行回数が多すぎます。${Math.ceil(ms / MINUTE)} 分ほど待ってからもう一度お試しください`,
+        { retryAfterSeconds: Math.ceil(ms / 1000) }
+      );
+    }
+  }
+
+  // ---- セッション ----
 
   function sessionCookie(value, maxAgeSeconds) {
     return [
@@ -197,31 +337,67 @@ function createApp({ db, publicDir, secureCookies = false }) {
 
     const now = Date.now();
     stmts.deleteExpiredSessions.run(now);
-    const token = crypto.randomBytes(32).toString("base64url");
+    const token = randomToken();
     stmts.insertSession.run(sha256(token), userId, now + SESSION_TTL_MS);
     res.setHeader("Set-Cookie", sessionCookie(token, SESSION_TTL_MS / 1000));
   }
 
-  function listTasks(userId) {
-    return stmts.listTasks.all(userId).map(toTask);
+  // ---- メール ----
+
+  /** メール内リンク用のトークンを発行する（同じ用途の古いリンクは無効になる） */
+  function issueEmailToken(userId, purpose, ttlMs) {
+    const now = Date.now();
+    stmts.deleteExpiredEmailTokens.run(now);
+    stmts.deleteEmailTokens.run(userId, purpose);
+    const token = randomToken();
+    stmts.insertEmailToken.run(sha256(token), userId, purpose, now + ttlMs);
+    return token;
   }
 
-  function transaction(fn) {
-    db.exec("BEGIN");
-    try {
-      fn();
-      db.exec("COMMIT");
-    } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
-    }
+  /** メールを送る。送信の成否や所要時間から登録有無を推測されないよう、完了を待たずに応答する */
+  function deliver(message) {
+    mailer.send(message).catch((err) => console.error("Failed to send email:", err));
   }
+
+  function sendVerificationEmail(user) {
+    limiters.verifyEmails.hit(String(user.id));
+    const token = issueEmailToken(user.id, "verify_email", VERIFY_EMAIL_TOKEN_TTL_MS);
+    deliver({
+      to: user.email,
+      subject: "【タスク管理】メールアドレスの確認",
+      text: [
+        "タスク管理アプリへのご登録ありがとうございます。",
+        "",
+        "以下のリンクを開いて、メールアドレスの確認を完了してください（24 時間有効）。",
+        `${appBaseUrl}/#verify=${token}`,
+        "",
+        "お心当たりがない場合は、このメールを破棄してください。",
+      ].join("\n"),
+    });
+  }
+
+  function sendPasswordResetEmail(user) {
+    const token = issueEmailToken(user.id, "reset_password", RESET_PASSWORD_TOKEN_TTL_MS);
+    deliver({
+      to: user.email,
+      subject: "【タスク管理】パスワードの再設定",
+      text: [
+        "パスワード再設定のリクエストを受け付けました。",
+        "",
+        "以下のリンクを開いて、新しいパスワードを設定してください（1 時間有効）。",
+        `${appBaseUrl}/#reset=${token}`,
+        "",
+        "お心当たりがない場合は、このメールを破棄してください。パスワードは変更されません。",
+      ].join("\n"),
+    });
+  }
+
+  // ---- 認証 API ----
 
   async function register(req, res) {
-    const { email, password } = parseCredentials(await readJson(req));
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      throw new HttpError(400, `パスワードは ${MIN_PASSWORD_LENGTH} 文字以上にしてください`);
-    }
+    const body = await readJson(req);
+    const { email } = parseCredentials(body);
+    const password = parseNewPassword(body.password);
     const alreadyRegistered = new HttpError(409, "このメールアドレスは既に登録されています");
     if (stmts.findUserByEmail.get(email)) throw alreadyRegistered;
 
@@ -234,18 +410,25 @@ function createApp({ db, publicDir, secureCookies = false }) {
       throw err;
     }
     startSession(req, res, userId);
-    sendJson(res, 201, { user: { email } });
+    const user = stmts.findUserById.get(userId);
+    sendVerificationEmail(user);
+    sendJson(res, 201, { user: toPublicUser(user) });
   }
 
   async function login(req, res) {
     const { email, password } = parseCredentials(await readJson(req));
+    const failureKey = `${clientIp(req)}|${email}`;
+    enforceLimit(limiters.loginFailures, failureKey);
+
     const user = stmts.findUserByEmail.get(email);
     const valid = await verifyPassword(password, user ? user.password_hash : await dummyHashPromise);
     if (!user || !valid) {
+      limiters.loginFailures.hit(failureKey);
       throw new HttpError(401, "メールアドレスまたはパスワードが違います");
     }
+    limiters.loginFailures.reset(failureKey);
     startSession(req, res, user.id);
-    sendJson(res, 200, { user: { email: user.email } });
+    sendJson(res, 200, { user: toPublicUser(user) });
   }
 
   function logout(req, res) {
@@ -254,6 +437,59 @@ function createApp({ db, publicDir, secureCookies = false }) {
     res.setHeader("Set-Cookie", sessionCookie("", 0));
     sendNoContent(res);
   }
+
+  async function verifyEmail(req, res) {
+    const token = parseToken((await readJson(req)).token);
+    const user = stmts.findEmailToken.get(sha256(token), "verify_email", Date.now());
+    if (!user) throw invalidLink();
+    transaction(() => {
+      stmts.markEmailVerified.run(Date.now(), user.id);
+      stmts.deleteEmailTokens.run(user.id, "verify_email");
+    });
+    sendJson(res, 200, { email: user.email });
+  }
+
+  function resendVerification(res, user) {
+    if (user.email_verified_at !== null) throw new HttpError(400, "メールアドレスは確認済みです");
+    enforceLimit(limiters.verifyEmails, String(user.id));
+    sendVerificationEmail(user);
+    sendNoContent(res);
+  }
+
+  async function requestPasswordReset(req, res) {
+    const email = parseEmail((await readJson(req)).email);
+    // 登録の有無にかかわらず同じ回数で制限し、同じ応答を返す（登録有無を推測されないようにする）
+    enforceLimit(limiters.resetEmails, email);
+    limiters.resetEmails.hit(email);
+    const user = stmts.findUserByEmail.get(email);
+    if (user) sendPasswordResetEmail(user);
+    sendNoContent(res);
+  }
+
+  async function confirmPasswordReset(req, res) {
+    const body = await readJson(req);
+    const token = parseToken(body.token);
+    const passwordHash = await hashPassword(parseNewPassword(body.password));
+
+    const user = transaction(() => {
+      const found = stmts.findEmailToken.get(sha256(token), "reset_password", Date.now());
+      if (!found) return null;
+      stmts.updatePassword.run(passwordHash, found.id);
+      // メールのリンクを開けた = メールアドレスの持ち主なので、確認済みにする
+      stmts.markEmailVerified.run(Date.now(), found.id);
+      stmts.deleteAllEmailTokens.run(found.id);
+      // 他の端末に残っているログインはすべて無効にする
+      stmts.deleteUserSessions.run(found.id);
+      return found;
+    });
+    if (!user) throw invalidLink();
+
+    limiters.loginFailures.reset(`${clientIp(req)}|${user.email}`);
+    startSession(req, res, user.id);
+    sendJson(res, 200, { user: toPublicUser(stmts.findUserById.get(user.id)) });
+  }
+
+  // ---- タスク API ----
 
   async function createTask(req, res, user) {
     const text = parseTaskText((await readJson(req)).text);
@@ -265,7 +501,7 @@ function createApp({ db, publicDir, secureCookies = false }) {
   /** ブラウザの localStorage に残っていた以前のタスクをアカウントに取り込む */
   async function importTasks(req, res, user) {
     const { tasks } = await readJson(req);
-    if (!Array.isArray(tasks)) throw new HttpError(400, "リクエストの形式が正しくありません");
+    if (!Array.isArray(tasks)) throw invalidRequest();
     if (tasks.length > MAX_IMPORT_TASKS) {
       throw new HttpError(400, `一度に取り込めるのは ${MAX_IMPORT_TASKS} 件までです`);
     }
@@ -287,11 +523,13 @@ function createApp({ db, publicDir, secureCookies = false }) {
     sendJson(res, 200, { tasks: listTasks(user.id) });
   }
 
+  function listTasks(userId) {
+    return stmts.listTasks.all(userId).map(toTask);
+  }
+
   async function updateTask(req, res, user, id) {
     const { completed } = await readJson(req);
-    if (typeof completed !== "boolean") {
-      throw new HttpError(400, "リクエストの形式が正しくありません");
-    }
+    if (typeof completed !== "boolean") throw invalidRequest();
     const { changes } = stmts.updateTaskCompleted.run(completed ? 1 : 0, id, user.id);
     if (changes === 0) throw new HttpError(404, "タスクが見つかりません");
     sendJson(res, 200, { task: toTask(stmts.findTask.get(id, user.id)) });
@@ -308,23 +546,47 @@ function createApp({ db, publicDir, secureCookies = false }) {
     sendJson(res, 200, { tasks: listTasks(user.id) });
   }
 
+  // ---- ルーティング ----
+
   async function handleApi(req, res, pathname) {
     const { method } = req;
+
+    if (pathname === "/api/health" && method === "GET") {
+      db.prepare("SELECT 1").get();
+      return sendJson(res, 200, { ok: true });
+    }
 
     // CSRF 対策: 変更系リクエストはカスタムヘッダー必須（クロスサイトからは CORS で送れない）
     if (method !== "GET" && method !== "HEAD" && req.headers["x-requested-with"] !== "fetch") {
       throw new HttpError(403, "不正なリクエストです");
     }
 
-    if (pathname === "/api/register" && method === "POST") return register(req, res);
-    if (pathname === "/api/login" && method === "POST") return login(req, res);
-    if (pathname === "/api/logout" && method === "POST") return logout(req, res);
+    if (AUTH_PATHS.has(pathname) && method === "POST") {
+      const ip = clientIp(req);
+      enforceLimit(limiters.authPerIp, ip);
+      limiters.authPerIp.hit(ip);
+    }
+
+    if (method === "POST") {
+      if (pathname === "/api/register") return register(req, res);
+      if (pathname === "/api/login") return login(req, res);
+      if (pathname === "/api/logout") return logout(req, res);
+      if (pathname === "/api/verify-email") return verifyEmail(req, res);
+      if (pathname === "/api/password-reset/request") return requestPasswordReset(req, res);
+      if (pathname === "/api/password-reset/confirm") return confirmPasswordReset(req, res);
+    }
 
     const user = currentUser(req);
     if (pathname === "/api/me" && method === "GET") {
-      return sendJson(res, 200, { user: user ? { email: user.email } : null });
+      return sendJson(res, 200, { user: user ? toPublicUser(user) : null });
     }
     if (!user) throw new HttpError(401, "ログインしてください");
+
+    if (pathname === "/api/verify-email/resend" && method === "POST") return resendVerification(res, user);
+
+    if (user.email_verified_at === null) {
+      throw new HttpError(403, "メールアドレスの確認が必要です", { code: "email_unverified" });
+    }
 
     if (pathname === "/api/tasks") {
       if (method === "GET") return sendJson(res, 200, { tasks: listTasks(user.id) });
@@ -381,8 +643,10 @@ function createApp({ db, publicDir, secureCookies = false }) {
       const known = err instanceof HttpError;
       if (!known) console.error(err);
       if (res.headersSent) return res.end();
+      if (known && err.retryAfterSeconds) res.setHeader("Retry-After", String(err.retryAfterSeconds));
       sendJson(res, known ? err.status : 500, {
         error: known ? err.message : "サーバーでエラーが発生しました",
+        ...(known && err.code ? { code: err.code } : {}),
       });
     }
   };

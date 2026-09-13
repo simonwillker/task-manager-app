@@ -131,6 +131,51 @@ body {
   margin: 0;
 }
 
+.form-notice {
+  margin: 0 0 16px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: rgba(22, 163, 74, 0.1);
+  color: var(--success);
+  font-size: 0.85rem;
+}
+
+.form-notice[data-kind="error"] {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+}
+
+.view-title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.view-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.view-text strong {
+  color: var(--text);
+}
+
+.link-btn {
+  align-self: center;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: default;

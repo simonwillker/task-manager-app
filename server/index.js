@@ -2,23 +2,37 @@
 
 const http = require("http");
 const path = require("path");
+const { loadConfig } = require("./config");
 const { openDatabase } = require("./db");
+const { createMailer } = require("./mailer");
 const { createApp } = require("./app");
 
-const PORT = Number(process.env.PORT || 3000);
-// ローカルでは 127.0.0.1。サーバーやコンテナで公開するときは HOST=0.0.0.0 を指定する
-const HOST = process.env.HOST || "127.0.0.1";
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "data", "tasks.db");
-// HTTPS で配信するときは SECURE_COOKIES=true を指定する
-const SECURE_COOKIES = process.env.SECURE_COOKIES === "true";
+let config;
+try {
+  config = loadConfig();
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
 
-const db = openDatabase(DB_PATH);
+const db = openDatabase(config.dbPath);
 const server = http.createServer(
-  createApp({ db, publicDir: path.join(__dirname, "..", "public"), secureCookies: SECURE_COOKIES })
+  createApp({
+    db,
+    publicDir: path.join(__dirname, "..", "public"),
+    mailer: createMailer(config.mail),
+    appBaseUrl: config.appBaseUrl,
+    secureCookies: config.secureCookies,
+    trustProxy: config.trustProxy,
+    authRateLimitPerIp: config.authRateLimitPerIp,
+  })
 );
 
-server.listen(PORT, HOST, () => {
-  console.log(`Task Manager listening on http://${HOST}:${PORT} (db: ${DB_PATH})`);
+server.listen(config.port, config.host, () => {
+  console.log(`Task Manager listening on http://${config.host}:${config.port} (db: ${config.dbPath})`);
+  if (config.mail.transport === "console") {
+    console.log("MAIL_TRANSPORT=console: メールは送信されず、このログに出力されます");
+  }
 });
 
 function shutdown() {

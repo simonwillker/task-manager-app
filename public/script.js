@@ -5,27 +5,48 @@
   const LEGACY_STORAGE_KEY = "taskManagerApp.tasks";
   const REQUEST_TIMEOUT_MS = 15000;
 
-  const loading = document.getElementById("loading");
+  const $ = (id) => document.getElementById(id);
 
-  const authView = document.getElementById("auth-view");
+  const views = {
+    loading: $("loading"),
+    auth: $("auth-view"),
+    forgot: $("forgot-view"),
+    reset: $("reset-view"),
+    verify: $("verify-view"),
+    task: $("task-view"),
+  };
+  const notice = $("notice");
+
   const authTabs = document.querySelectorAll("[data-mode]");
-  const authForm = document.getElementById("auth-form");
-  const authEmail = document.getElementById("auth-email");
-  const authPassword = document.getElementById("auth-password");
-  const authHint = document.getElementById("auth-hint");
-  const authError = document.getElementById("auth-error");
-  const authSubmit = document.getElementById("auth-submit");
+  const authForm = $("auth-form");
+  const authEmail = $("auth-email");
+  const authPassword = $("auth-password");
+  const authHint = $("auth-hint");
+  const authError = $("auth-error");
+  const authSubmit = $("auth-submit");
 
-  const taskView = document.getElementById("task-view");
-  const userEmail = document.getElementById("user-email");
-  const logoutBtn = document.getElementById("logout-btn");
-  const form = document.getElementById("task-form");
-  const input = document.getElementById("task-input");
-  const taskError = document.getElementById("task-error");
-  const list = document.getElementById("task-list");
-  const emptyState = document.getElementById("empty-state");
-  const countLabel = document.getElementById("task-count");
-  const clearCompletedBtn = document.getElementById("clear-completed");
+  const forgotForm = $("forgot-form");
+  const forgotEmail = $("forgot-email");
+  const forgotError = $("forgot-error");
+  const forgotSubmit = $("forgot-submit");
+
+  const resetForm = $("reset-form");
+  const resetPassword = $("reset-password");
+  const resetError = $("reset-error");
+  const resetSubmit = $("reset-submit");
+
+  const verifyEmail = $("verify-email");
+  const verifyError = $("verify-error");
+  const verifyResend = $("verify-resend");
+
+  const userEmail = $("user-email");
+  const form = $("task-form");
+  const input = $("task-input");
+  const taskError = $("task-error");
+  const list = $("task-list");
+  const emptyState = $("empty-state");
+  const countLabel = $("task-count");
+  const clearCompletedBtn = $("clear-completed");
   const filterButtons = document.querySelectorAll("[data-filter]");
 
   /** @type {{id: string, text: string, completed: boolean, createdAt: number}[]} */
@@ -33,6 +54,8 @@
   let currentFilter = "all";
   let authMode = "login";
   let signedIn = false;
+  /** メールのリンクから受け取ったパスワード再設定用トークン */
+  let resetToken = null;
 
   // 同じブラウザの別タブへ変更を通知する
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("taskManagerApp") : null;
@@ -64,7 +87,7 @@
     const data = res.status === 204 ? null : await res.json().catch(() => null);
     if (!res.ok) {
       const message = (data && data.error) || "通信に失敗しました";
-      throw Object.assign(new Error(message), { status: res.status });
+      throw Object.assign(new Error(message), { status: res.status, code: data && data.code });
     }
     return data;
   }
@@ -76,15 +99,29 @@
     el.hidden = !message;
   }
 
-  function showAuth() {
-    signedIn = false;
-    tasks = [];
-    loading.hidden = true;
-    taskView.hidden = true;
-    authView.hidden = false;
+  /** 画面を切り替える。画面上部のお知らせは切り替えのたびに差し替える */
+  function showView(name, { message = "", kind = "success" } = {}) {
+    for (const [key, el] of Object.entries(views)) el.hidden = key !== name;
+    notice.dataset.kind = kind;
+    showMessage(notice, message);
   }
 
-  async function showTasks(user) {
+  function showAuth(options) {
+    signedIn = false;
+    tasks = [];
+    list.innerHTML = "";
+    showMessage(authError, "");
+    showView("auth", options);
+  }
+
+  function showVerify(user, options) {
+    signedIn = false;
+    verifyEmail.textContent = user.email;
+    showMessage(verifyError, "");
+    showView("verify", options);
+  }
+
+  async function showTasks(user, options) {
     signedIn = true;
     userEmail.textContent = user.email;
     showMessage(taskError, "");
@@ -93,7 +130,7 @@
       const importFailed = await importLegacyTasks().then(
         () => false,
         (err) => {
-          if (err.status === 401) throw err;
+          if (err.status === 401 || err.status === 403) throw err;
           return true;
         }
       );
@@ -103,37 +140,84 @@
       }
     });
     if (!signedIn) return;
-    loading.hidden = true;
-    authView.hidden = true;
-    taskView.hidden = false;
+    showView("task", options);
   }
 
-  /** 操作を実行し、失敗したらメッセージを表示する。セッション切れならログイン画面に戻す */
+  /** タスク画面での操作を実行し、失敗したらメッセージを表示する */
   async function run(action) {
     showMessage(taskError, "");
     try {
       await action();
     } catch (err) {
       if (err.status === 401) {
-        showAuth();
-        showMessage(authError, "ログインの有効期限が切れました。もう一度ログインしてください");
-        return;
+        showAuth({ message: "ログインの有効期限が切れました。もう一度ログインしてください", kind: "error" });
+      } else if (err.code === "email_unverified") {
+        await init();
+      } else {
+        showMessage(taskError, err.message);
       }
-      showMessage(taskError, err.message);
     }
   }
 
-  async function init() {
+  /** フォーム送信中はボタンを無効にし、失敗したらフォーム内にメッセージを表示する */
+  async function submitForm(button, errorEl, action) {
+    showMessage(errorEl, "");
+    button.disabled = true;
+    try {
+      await action();
+    } catch (err) {
+      showMessage(errorEl, err.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  /** ログイン状態を確認して、適切な画面を表示する */
+  async function init(options) {
     try {
       const { user } = await api("GET", "/api/me");
-      if (user) await showTasks(user);
-      else showAuth();
+      if (!user) showAuth(options);
+      else if (!user.emailVerified) showVerify(user, options);
+      else await showTasks(user, options);
     } catch (err) {
-      showMessage(loading, err.message);
+      showView("loading");
+      showMessage(views.loading, err.message);
     }
   }
 
-  // ---- 認証 ----
+  /** URL の # 以降に付いたメールのリンク（確認・再設定）を処理してから画面を表示する */
+  async function start() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    const verifyToken = params.get("verify");
+    const passwordResetToken = params.get("reset");
+    if (verifyToken !== null || passwordResetToken !== null) {
+      // トークンを履歴やブックマークに残さない
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+
+    if (passwordResetToken) {
+      resetToken = passwordResetToken;
+      resetPassword.value = "";
+      showMessage(resetError, "");
+      showView("reset");
+      return;
+    }
+
+    if (verifyToken) {
+      try {
+        await api("POST", "/api/verify-email", { token: verifyToken });
+        notifyOtherTabs("auth");
+        await init({ message: "メールアドレスを確認しました" });
+      } catch (err) {
+        await init({ message: err.message, kind: "error" });
+      }
+      return;
+    }
+
+    await init();
+  }
+
+  // ---- ログイン / 新規登録 ----
 
   function setAuthMode(mode) {
     authMode = mode;
@@ -149,32 +233,85 @@
 
   authTabs.forEach((btn) => btn.addEventListener("click", () => setAuthMode(btn.dataset.mode)));
 
-  authForm.addEventListener("submit", async (e) => {
+  authForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    showMessage(authError, "");
-    authSubmit.disabled = true;
-    try {
+    submitForm(authSubmit, authError, async () => {
       const { user } = await api("POST", authMode === "register" ? "/api/register" : "/api/login", {
         email: authEmail.value,
         password: authPassword.value,
       });
       authPassword.value = "";
       notifyOtherTabs("auth");
-      await showTasks(user);
-    } catch (err) {
-      showMessage(authError, err.message);
-    } finally {
-      authSubmit.disabled = false;
-    }
+      if (user.emailVerified) await showTasks(user);
+      else showVerify(user);
+    });
   });
 
-  logoutBtn.addEventListener("click", () =>
-    run(async () => {
-      await api("POST", "/api/logout");
+  document.querySelectorAll("[data-logout]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      try {
+        await api("POST", "/api/logout");
+      } catch {
+        // 通信に失敗しても画面上はログアウトする
+      }
       notifyOtherTabs("auth");
       showAuth();
     })
   );
+
+  document.querySelectorAll("[data-back-to-login]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      resetToken = null;
+      init();
+    })
+  );
+
+  // ---- メールアドレスの確認 ----
+
+  verifyResend.addEventListener("click", () =>
+    submitForm(verifyResend, verifyError, async () => {
+      try {
+        await api("POST", "/api/verify-email/resend");
+      } catch (err) {
+        if (err.status === 401) return showAuth();
+        throw err;
+      }
+      showView("verify", { message: "確認メールを再送しました" });
+    })
+  );
+
+  // ---- パスワード再設定 ----
+
+  $("forgot-link").addEventListener("click", () => {
+    forgotEmail.value = authEmail.value;
+    showMessage(forgotError, "");
+    showView("forgot");
+  });
+
+  forgotForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitForm(forgotSubmit, forgotError, async () => {
+      await api("POST", "/api/password-reset/request", { email: forgotEmail.value });
+      showAuth({
+        message:
+          "入力したメールアドレスが登録されていれば、パスワード再設定用のメールを送信しました。届かない場合は迷惑メールフォルダも確認してください",
+      });
+    });
+  });
+
+  resetForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitForm(resetSubmit, resetError, async () => {
+      const { user } = await api("POST", "/api/password-reset/confirm", {
+        token: resetToken,
+        password: resetPassword.value,
+      });
+      resetToken = null;
+      resetPassword.value = "";
+      notifyOtherTabs("auth");
+      await showTasks(user, { message: "パスワードを変更しました" });
+    });
+  });
 
   // ---- タスク ----
 
@@ -320,17 +457,21 @@
 
   if (channel) {
     channel.addEventListener("message", (e) => {
-      if (e.data === "auth") init();
+      // パスワード再設定の入力中は画面を切り替えない
+      if (e.data === "auth" && views.reset.hidden && views.forgot.hidden) init();
       else if (e.data === "tasks" && signedIn) run(refreshTasks);
     });
   }
 
-  // 別の端末で変更された内容を、画面に戻ってきたときに取り込む
-  function refreshIfSignedIn() {
-    if (signedIn && document.visibilityState === "visible") run(refreshTasks);
+  // 画面に戻ってきたとき、別の端末での変更やメールアドレスの確認を取り込む
+  function refreshOnReturn() {
+    if (document.visibilityState !== "visible") return;
+    if (signedIn) run(refreshTasks);
+    else if (!views.verify.hidden) init();
   }
-  window.addEventListener("focus", refreshIfSignedIn);
-  document.addEventListener("visibilitychange", refreshIfSignedIn);
+  window.addEventListener("focus", refreshOnReturn);
+  document.addEventListener("visibilitychange", refreshOnReturn);
+  window.addEventListener("hashchange", start);
 
-  init();
+  start();
 })();
