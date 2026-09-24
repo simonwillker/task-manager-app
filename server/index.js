@@ -26,11 +26,18 @@ const server = http.createServer(
     trustProxy: config.trustProxy,
     clientIpHeader: config.clientIpHeader,
     authRateLimitPerIp: config.authRateLimitPerIp,
+    adminEmails: config.adminEmails,
+    deletePassword: config.deletePassword,
   })
 );
 
 server.listen(config.port, config.host, () => {
   console.log(`Task Manager listening on http://${config.host}:${config.port} (db: ${config.dbPath})`);
+  if (config.adminEmails.length > 0) {
+    console.log(`管理者（タスクを削除できる人）: ${config.adminEmails.join(", ")}`);
+  } else {
+    console.log("ADMIN_EMAILS が未設定です。最初に登録したユーザーだけがタスクを削除できます");
+  }
   if (config.mail.transport === "console") {
     console.log("MAIL_TRANSPORT=console: メールは送信されず、このログに出力されます");
   }
