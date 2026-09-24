@@ -47,6 +47,14 @@
   const emptyState = $("empty-state");
   const countLabel = $("task-count");
   const clearCompletedBtn = $("clear-completed");
+  const deleteHint = $("delete-hint");
+  const deleteDialog = $("delete-dialog");
+  const deleteForm = $("delete-form");
+  const deleteTarget = $("delete-target");
+  const deletePassword = $("delete-password");
+  const deleteError = $("delete-error");
+  const deleteConfirm = $("delete-confirm");
+  const deleteCancel = $("delete-cancel");
   const filterButtons = document.querySelectorAll("[data-filter]");
 
   /** @type {{id: string, text: string, completed: boolean, createdAt: number}[]} */
@@ -54,6 +62,10 @@
   let currentFilter = "all";
   let authMode = "login";
   let signedIn = false;
+  /** 管理者だけがタスクを削除できる。実際の可否はサーバーが毎回判定する */
+  let isAdmin = false;
+  /** 削除ダイアログで「はい」が押されたときに実行する処理 */
+  let pendingDelete = null;
   /** メールのリンクから受け取ったパスワード再設定用トークン */
   let resetToken = null;
 
@@ -108,6 +120,8 @@
 
   function showAuth(options) {
     signedIn = false;
+    isAdmin = false;
+    closeDeleteDialog();
     tasks = [];
     list.innerHTML = "";
     showMessage(authError, "");
@@ -123,6 +137,10 @@
 
   async function showTasks(user, options) {
     signedIn = true;
+    isAdmin = user.isAdmin === true;
+    // 管理者以外には削除の導線そのものを見せない（サーバー側でも弾いている）
+    clearCompletedBtn.hidden = !isAdmin;
+    deleteHint.hidden = !isAdmin;
     userEmail.textContent = user.email;
     showMessage(taskError, "");
     await run(async () => {
@@ -364,20 +382,43 @@
     }
   }
 
-  async function deleteTask(id) {
+  async function deleteTask(id, password) {
     try {
-      await api("DELETE", `/api/tasks/${encodeURIComponent(id)}`);
+      await api("DELETE", `/api/tasks/${encodeURIComponent(id)}`, { password });
     } catch (err) {
+      // 既に消えている場合だけは成功扱いにする。権限・未完了・合言葉の誤りは呼び出し元に返す
       if (err.status !== 404) throw err;
     }
     tasks = tasks.filter((t) => t.id !== id);
     afterChange();
   }
 
-  async function clearCompleted() {
-    const data = await api("POST", "/api/tasks/clear-completed");
+  async function clearCompleted(password) {
+    const data = await api("POST", "/api/tasks/clear-completed", { password });
     tasks = data.tasks;
     afterChange();
+  }
+
+  // ---- 削除の確認ダイアログ ----
+
+  /**
+   * 合言葉を聞いてから削除する。
+   * @param {string} message 何を消すのかの説明
+   * @param {(password: string) => Promise<void>} action
+   */
+  function confirmDelete(message, action) {
+    pendingDelete = action;
+    deleteTarget.textContent = message;
+    deletePassword.value = "";
+    showMessage(deleteError, "");
+    deleteDialog.showModal();
+    deletePassword.focus();
+  }
+
+  function closeDeleteDialog() {
+    pendingDelete = null;
+    deletePassword.value = "";
+    if (deleteDialog.open) deleteDialog.close();
   }
 
   function getFilteredTasks() {
@@ -407,16 +448,28 @@
       span.textContent = task.text;
       span.addEventListener("click", () => run(() => toggleTask(task.id)));
 
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "task-delete";
-      deleteBtn.textContent = "✕";
-      deleteBtn.setAttribute("aria-label", "削除");
-      deleteBtn.addEventListener("click", () => run(() => deleteTask(task.id)));
-
       li.appendChild(checkbox);
       li.appendChild(span);
-      li.appendChild(deleteBtn);
+
+      // 削除は「管理者」かつ「完了済み」のときだけ。未完了のあいだはボタンを押せなくして
+      // 理由を出す（消えていると、なぜ消せないのか分からないため）
+      if (isAdmin) {
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "task-delete";
+        deleteBtn.textContent = "✕";
+        deleteBtn.setAttribute("aria-label", "削除");
+        if (!task.completed) {
+          deleteBtn.disabled = true;
+          deleteBtn.title = "完了していないタスクは削除できません";
+        } else {
+          deleteBtn.addEventListener("click", () =>
+            confirmDelete(`「${task.text}」を削除します。`, (password) => deleteTask(task.id, password))
+          );
+        }
+        li.appendChild(deleteBtn);
+      }
+
       list.appendChild(li);
     });
 
@@ -442,7 +495,30 @@
     });
   });
 
-  clearCompletedBtn.addEventListener("click", () => run(clearCompleted));
+  clearCompletedBtn.addEventListener("click", () => {
+    const done = tasks.filter((t) => t.completed).length;
+    if (done === 0) return showMessage(taskError, "完了済みのタスクがありません");
+    showMessage(taskError, "");
+    confirmDelete(`完了済みの ${done} 件をまとめて削除します。`, (password) => clearCompleted(password));
+  });
+
+  deleteForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const action = pendingDelete;
+    const password = deletePassword.value;
+    if (!action) return closeDeleteDialog();
+    submitForm(deleteConfirm, deleteError, async () => {
+      await action(password);
+      closeDeleteDialog();
+    });
+  });
+
+  deleteCancel.addEventListener("click", closeDeleteDialog);
+  // Esc で閉じたときも、入力した合言葉を残さない
+  deleteDialog.addEventListener("close", () => {
+    pendingDelete = null;
+    deletePassword.value = "";
+  });
 
   filterButtons.forEach((btn) => {
     btn.addEventListener("click", () => {

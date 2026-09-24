@@ -346,3 +346,51 @@ body {
   font-size: 0.82rem;
   text-align: center;
 }
+
+/* ---- 削除の確認ダイアログ ---- */
+
+.delete-dialog {
+  border: none;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 380px;
+  width: calc(100% - 32px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.delete-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.delete-title {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.delete-target {
+  margin: 0 0 16px;
+  font-size: 0.9rem;
+  color: #555;
+  word-break: break-word;
+}
+
+.delete-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.delete-hint {
+  margin: 12px 0 0;
+  font-size: 0.8rem;
+  color: #777;
+  line-height: 1.6;
+}
+
+/* 未完了のタスクは削除できないので、押せないことが見て分かるようにする */
+.task-delete:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+

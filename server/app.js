@@ -66,6 +66,16 @@ async function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(actual, expected);
 }
 
+/** 長さや先頭の一致具合から中身を推測されないよう、一定時間で文字列を比べる */
+function timingSafeEqual(a, b) {
+  const left = Buffer.from(String(a), "utf8");
+  const right = Buffer.from(String(b), "utf8");
+  // 長さが違うと crypto.timingSafeEqual が例外を投げるので、同じ長さに畳んでから比べる
+  const leftHash = crypto.createHash("sha256").update(left).digest();
+  const rightHash = crypto.createHash("sha256").update(right).digest();
+  return crypto.timingSafeEqual(leftHash, rightHash);
+}
+
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -173,7 +183,12 @@ function toTask(row) {
 }
 
 function toPublicUser(row) {
-  return { email: row.email, emailVerified: row.email_verified_at !== null };
+  return {
+    email: row.email,
+    emailVerified: row.email_verified_at !== null,
+    // 画面の出し分けに使う。実際の可否はサーバー側で毎回確かめる
+    isAdmin: Boolean(row.is_admin),
+  };
 }
 
 /**
@@ -187,6 +202,8 @@ function toPublicUser(row) {
  *   trustProxy?: boolean,
  *   clientIpHeader?: string,
  *   authRateLimitPerIp?: number,
+ *   adminEmails?: string[],
+ *   deletePassword?: string,
  * }} options
  */
 function createApp({
@@ -198,6 +215,8 @@ function createApp({
   trustProxy = false,
   clientIpHeader = "",
   authRateLimitPerIp = 60,
+  adminEmails = [],
+  deletePassword = "",
 }) {
   const rootDir = path.resolve(publicDir);
   // 存在しないユーザーでもパスワード照合と同じ時間をかけ、登録有無を推測されにくくする
@@ -211,23 +230,28 @@ function createApp({
     // 確認メール・再設定メールの送信回数（大量送信の防止）
     verifyEmails: new RateLimiter({ max: 3, windowMs: 60 * MINUTE }),
     resetEmails: new RateLimiter({ max: 3, windowMs: 60 * MINUTE }),
+    // 削除パスワードの誤り回数（IP アドレス + ユーザーごと）。
+    // 短い合言葉なので、総当たりされないようにここで止める。
+    deleteFailures: new RateLimiter({ max: 5, windowMs: 15 * MINUTE }),
   };
   setInterval(() => Object.values(limiters).forEach((limiter) => limiter.prune()), MINUTE).unref();
 
   const stmts = {
     insertUser: db.prepare("INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)"),
-    findUserById: db.prepare("SELECT id, email, email_verified_at FROM users WHERE id = ?"),
+    findUserById: db.prepare("SELECT id, email, email_verified_at, is_admin FROM users WHERE id = ?"),
     findUserByEmail: db.prepare(
-      "SELECT id, email, password_hash, email_verified_at FROM users WHERE email = ?"
+      "SELECT id, email, password_hash, email_verified_at, is_admin FROM users WHERE email = ?"
     ),
     markEmailVerified: db.prepare(
       "UPDATE users SET email_verified_at = ? WHERE id = ? AND email_verified_at IS NULL"
     ),
     updatePassword: db.prepare("UPDATE users SET password_hash = ? WHERE id = ?"),
+    setAdmin: db.prepare("UPDATE users SET is_admin = ? WHERE id = ? AND is_admin != ?"),
+    firstUserId: db.prepare("SELECT MIN(id) AS id FROM users"),
 
     insertSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)"),
     findSessionUser: db.prepare(`
-      SELECT users.id, users.email, users.email_verified_at FROM sessions
+      SELECT users.id, users.email, users.email_verified_at, users.is_admin FROM sessions
       JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > ?
     `),
@@ -256,9 +280,37 @@ function createApp({
       "INSERT INTO tasks (id, user_id, text, completed, created_at) VALUES (?, ?, ?, ?, ?)"
     ),
     updateTaskCompleted: db.prepare("UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?"),
-    deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ?"),
+    deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ? AND completed = 1"),
     deleteCompletedTasks: db.prepare("DELETE FROM tasks WHERE user_id = ? AND completed = 1"),
   };
+
+  /** ADMIN_EMAILS に載っているか。"@example.com" 形式ならドメイン全体が対象 */
+  function isAdminEmail(email) {
+    const value = String(email).toLowerCase();
+    return adminEmails.some((entry) =>
+      entry.startsWith("@") ? value.endsWith(entry) : value === entry
+    );
+  }
+
+  /** 最初に登録したユーザーの id（まだ誰もいなければ null） */
+  function firstUserId() {
+    const row = stmts.firstUserId.get();
+    return row && row.id !== null ? Number(row.id) : null;
+  }
+
+  /** ADMIN_EMAILS に載っているユーザーを管理者にする（外れたら外す）。起動時とログイン・登録時に呼ぶ */
+  function syncAdmin(user) {
+    if (!user) return user;
+    // ADMIN_EMAILS が未設定のときは触らない（最初に登録したユーザーが管理者のまま）
+    if (adminEmails.length === 0) return user;
+    // 設定されているときは、その一覧だけが管理者。ここで増減を反映する
+    const shouldBeAdmin = isAdminEmail(user.email) ? 1 : 0;
+    if (Boolean(user.is_admin) !== Boolean(shouldBeAdmin)) {
+      stmts.setAdmin.run(shouldBeAdmin, user.id, shouldBeAdmin);
+      return { ...user, is_admin: shouldBeAdmin };
+    }
+    return user;
+  }
 
   function transaction(fn) {
     db.exec("BEGIN");
@@ -333,7 +385,9 @@ function createApp({
 
   function currentUser(req) {
     const token = sessionToken(req);
-    return token ? stmts.findSessionUser.get(sha256(token), Date.now()) || null : null;
+    if (!token) return null;
+    const user = stmts.findSessionUser.get(sha256(token), Date.now()) || null;
+    return syncAdmin(user);
   }
 
   function startSession(req, res, userId) {
@@ -415,8 +469,11 @@ function createApp({
       if (/UNIQUE/.test(String(err.message))) throw alreadyRegistered;
       throw err;
     }
+    // ADMIN_EMAILS が無い環境では、最初に登録したユーザーを管理者にする。
+    // そうしないと誰もタスクを削除できないアプリになってしまう。
+    if (adminEmails.length === 0 && firstUserId() === userId) stmts.setAdmin.run(1, userId, 1);
     startSession(req, res, userId);
-    const user = stmts.findUserById.get(userId);
+    const user = syncAdmin(stmts.findUserById.get(userId));
     sendVerificationEmail(user);
     sendJson(res, 201, { user: toPublicUser(user) });
   }
@@ -434,7 +491,7 @@ function createApp({
     }
     limiters.loginFailures.reset(failureKey);
     startSession(req, res, user.id);
-    sendJson(res, 200, { user: toPublicUser(user) });
+    sendJson(res, 200, { user: toPublicUser(syncAdmin(user)) });
   }
 
   function logout(req, res) {
@@ -541,13 +598,47 @@ function createApp({
     sendJson(res, 200, { task: toTask(stmts.findTask.get(id, user.id)) });
   }
 
-  function deleteTask(res, user, id) {
+  /**
+   * タスクを削除してよいかを確かめる。3つとも満たさないと削除させない。
+   *   1. 管理者であること
+   *   2. （個別削除のとき）そのタスクが完了していること
+   *   3. 削除用パスワードが合っていること
+   * 画面側でもボタンを出し分けるが、判定はここが本番。API を直接叩かれても通らない。
+   */
+  function authorizeDelete(req, user, body) {
+    if (!user.is_admin) {
+      throw new HttpError(403, "タスクを削除できるのは管理者だけです", { code: "not_admin" });
+    }
+    // 短い合言葉なので、誤りが続いたらしばらく受け付けない
+    const failureKey = `${clientIp(req)}|${user.id}`;
+    enforceLimit(limiters.deleteFailures, failureKey);
+
+    const given = typeof body?.password === "string" ? body.password : "";
+    if (!timingSafeEqual(given, deletePassword)) {
+      limiters.deleteFailures.hit(failureKey);
+      throw new HttpError(403, "削除用パスワードが違います", { code: "bad_delete_password" });
+    }
+    limiters.deleteFailures.reset(failureKey);
+  }
+
+  async function deleteTask(req, res, user, id) {
+    authorizeDelete(req, user, await readJson(req));
+
+    const task = stmts.findTask.get(id, user.id);
+    if (!task) throw new HttpError(404, "タスクが見つかりません");
+    if (!task.completed) {
+      throw new HttpError(409, "完了していないタスクは削除できません", { code: "task_not_completed" });
+    }
+
+    // SQL 側でも completed = 1 を条件にしてある（確認と削除の間に未完了へ戻された場合の保険）
     const { changes } = stmts.deleteTask.run(id, user.id);
-    if (changes === 0) throw new HttpError(404, "タスクが見つかりません");
+    if (changes === 0) throw new HttpError(409, "完了していないタスクは削除できません", { code: "task_not_completed" });
     sendNoContent(res);
   }
 
-  function clearCompleted(res, user) {
+  async function clearCompleted(req, res, user) {
+    // まとめて消すほうも同じ扱いにしないと、1件ずつの制限を素通りできてしまう
+    authorizeDelete(req, user, await readJson(req));
     stmts.deleteCompletedTasks.run(user.id);
     sendJson(res, 200, { tasks: listTasks(user.id) });
   }
@@ -599,13 +690,13 @@ function createApp({
       if (method === "POST") return createTask(req, res, user);
     }
     if (pathname === "/api/tasks/import" && method === "POST") return importTasks(req, res, user);
-    if (pathname === "/api/tasks/clear-completed" && method === "POST") return clearCompleted(res, user);
+    if (pathname === "/api/tasks/clear-completed" && method === "POST") return clearCompleted(req, res, user);
 
     const match = pathname.match(/^\/api\/tasks\/([^/]+)$/);
     if (match) {
       const id = decodeURIComponent(match[1]);
       if (method === "PATCH") return updateTask(req, res, user, id);
-      if (method === "DELETE") return deleteTask(res, user, id);
+      if (method === "DELETE") return deleteTask(req, res, user, id);
     }
 
     throw new HttpError(404, "見つかりません");

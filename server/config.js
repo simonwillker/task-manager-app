@@ -4,6 +4,17 @@ const path = require("path");
 
 const MAIL_TRANSPORTS = ["console", "file", "resend"];
 
+/**
+ * ADMIN_EMAILS はカンマ区切り。前後の空白を落とし、小文字にそろえて比較する。
+ * "@example.com" のように @ で始めると、そのドメインのアドレス全員が管理者になる。
+ */
+function parseAdminEmails(raw) {
+  return (raw || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 function positiveInt(name, fallback, env) {
   const raw = env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -35,6 +46,11 @@ function loadConfig(env = process.env) {
     // プロキシがクライアントの IP を入れるヘッダー名（Fly.io なら fly-client-ip）。TRUST_PROXY より優先する
     clientIpHeader: (env.CLIENT_IP_HEADER || "").trim().toLowerCase(),
     authRateLimitPerIp: positiveInt("AUTH_RATE_LIMIT_PER_IP", 60, env),
+    // タスクを削除できる管理者のメールアドレス（カンマ区切り）。
+    // 指定が無くても、最初に登録したユーザーは管理者になる（db.js のマイグレーション3）。
+    adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
+    // タスク削除時に入力させる合言葉。画面には送らず、サーバー側だけで照合する。
+    deletePassword: env.DELETE_PASSWORD || "123456",
     mail: {
       transport: env.MAIL_TRANSPORT || "console",
       from: env.MAIL_FROM || "Task Manager <no-reply@example.com>",
@@ -44,6 +60,7 @@ function loadConfig(env = process.env) {
   };
 
   const errors = [];
+  if (!config.deletePassword) errors.push("DELETE_PASSWORD must not be empty");
   if (!MAIL_TRANSPORTS.includes(config.mail.transport)) {
     errors.push(`MAIL_TRANSPORT must be one of: ${MAIL_TRANSPORTS.join(", ")}`);
   }

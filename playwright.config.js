@@ -34,6 +34,10 @@ module.exports = defineConfig({
       MAIL_OUTBOX_DIR,
       // すべてのテストが同じ IP から登録・ログインするため、IP 単位の制限は実質無効にする
       AUTH_RATE_LIMIT_PER_IP: "100000",
+      // @admins.test のアドレスで登録したユーザーを管理者として扱う。
+      // テストごとにアドレスが変わるので、ドメイン指定で管理者・一般を作り分ける
+      ADMIN_EMAILS: "@admins.test",
+      DELETE_PASSWORD: "123456",
     },
   },
 });

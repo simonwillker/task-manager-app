@@ -9,9 +9,19 @@ const API_HEADERS = { "X-Requested-With": "fetch" };
 /** playwright.config.js の MAIL_OUTBOX_DIR と同じ場所 */
 const MAIL_OUTBOX_DIR = path.join(__dirname, "..", "test-results", "mail-outbox");
 
+const DELETE_PASSWORD = "123456";
+
 /** テストごとに重複しないメールアドレスを作る */
 function uniqueEmail() {
   return `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
+}
+
+/**
+ * 管理者になるメールアドレス。playwright.config.js の ADMIN_EMAILS が
+ * "@admins.test" を管理者として扱う設定になっている。
+ */
+function uniqueAdminEmail() {
+  return `admin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@admins.test`;
 }
 
 /** テスト用サーバーが指定アドレス宛に送ったメールを、送信順に返す */
@@ -76,6 +86,16 @@ async function registerViaApi(request, email = uniqueEmail(), password = PASSWOR
   return { email, password };
 }
 
+/** API で新規登録し、確認メールのリンクも API 経由で消化して使える状態にする */
+async function registerVerifiedViaApi(request, email = uniqueEmail(), password = PASSWORD) {
+  await registerViaApi(request, email, password);
+  const link = await waitForMailLink(email, "メールアドレスの確認");
+  const token = new URLSearchParams(new URL(link).hash.slice(1)).get("verify");
+  const res = await request.post("/api/verify-email", { headers: API_HEADERS, data: { token } });
+  expect(res.status()).toBe(200);
+  return { email, password };
+}
+
 function loginViaApi(request, email, password) {
   return request.post("/api/login", { headers: API_HEADERS, data: { email, password } });
 }
@@ -96,6 +116,18 @@ async function addTasks(page, texts) {
     await page.click("#task-form .btn-primary");
     await expect(page.locator(".task-text").first()).toHaveText(text);
   }
+}
+
+/** 管理者として登録し、メールアドレスの確認まで済ませる */
+function registerAdmin(page) {
+  return register(page, uniqueAdminEmail());
+}
+
+/** 削除の確認ダイアログに合言葉を入れて実行する */
+async function confirmDelete(page, password = DELETE_PASSWORD) {
+  await expect(page.locator("#delete-dialog")).toBeVisible();
+  await page.fill("#delete-password", password);
+  await page.click("#delete-confirm");
 }
 
 /** n 番目のタスクを完了にし、保存されるまで待つ */
@@ -509,27 +541,120 @@ test.describe("フィルタ", () => {
 });
 
 test.describe("削除", () => {
-  test.beforeEach(async ({ page }) => {
-    await register(page);
-  });
-
-  test("✕ ボタンで個別に削除できる", async ({ page }) => {
+  test("管理者は完了済みのタスクを合言葉つきで削除できる", async ({ page }) => {
+    await registerAdmin(page);
     await addTasks(page, ["牛乳を買う", "レポートを書く"]);
+    await completeTask(page, 0);
+
     await page.locator(".task-item").first().locator(".task-delete").click();
+    await confirmDelete(page);
 
     await expect(page.locator(".task-item")).toHaveCount(1);
     await expect(page.locator(".task-text").first()).toHaveText("牛乳を買う");
   });
 
-  test("完了済みを一括削除できる", async ({ page }) => {
+  test("未完了のタスクは削除ボタンを押せない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う"]);
+
+    const deleteBtn = page.locator(".task-item").first().locator(".task-delete");
+    await expect(deleteBtn).toBeDisabled();
+    await expect(deleteBtn).toHaveAttribute("title", "完了していないタスクは削除できません");
+  });
+
+  test("未完了のタスクは API を直接呼んでも削除できない", async ({ page, request }) => {
+    const { email } = await registerVerifiedViaApi(request, uniqueAdminEmail());
+    expect(email).toContain("@admins.test");
+    const created = await request.post("/api/tasks", {
+      headers: API_HEADERS,
+      data: { text: "まだ終わっていない" },
+    });
+    const { task } = await created.json();
+
+    const res = await request.delete(`/api/tasks/${task.id}`, {
+      headers: API_HEADERS,
+      data: { password: DELETE_PASSWORD },
+    });
+    expect(res.status()).toBe(409);
+    expect((await res.json()).error).toBe("完了していないタスクは削除できません");
+
+    const list = await (await request.get("/api/tasks", { headers: API_HEADERS })).json();
+    expect(list.tasks).toHaveLength(1);
+  });
+
+  test("管理者でないユーザーには削除の導線が出ず、API も拒否される", async ({ page, request }) => {
+    await register(page);
+    await addTasks(page, ["牛乳を買う"]);
+    await completeTask(page, 0);
+
+    await expect(page.locator(".task-item").first().locator(".task-delete")).toHaveCount(0);
+    await expect(page.locator("#clear-completed")).toBeHidden();
+
+    // 画面に出ていないだけでなく、API を直接呼んでも通らない
+    const id = await page.locator(".task-item").first().getAttribute("data-id");
+    const res = await page.request.delete(`/api/tasks/${id}`, {
+      headers: API_HEADERS,
+      data: { password: DELETE_PASSWORD },
+    });
+    expect(res.status()).toBe(403);
+    expect((await res.json()).error).toBe("タスクを削除できるのは管理者だけです");
+  });
+
+  test("合言葉が違うと削除されない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う"]);
+    await completeTask(page, 0);
+
+    await page.locator(".task-item").first().locator(".task-delete").click();
+    await confirmDelete(page, "wrong-password");
+
+    await expect(page.locator("#delete-error")).toHaveText("削除用パスワードが違います");
+    await expect(page.locator(".task-item")).toHaveCount(1);
+  });
+
+  test("合言葉なしの DELETE は拒否される", async ({ request }) => {
+    await registerVerifiedViaApi(request, uniqueAdminEmail());
+    const created = await request.post("/api/tasks", {
+      headers: API_HEADERS,
+      data: { text: "終わったタスク" },
+    });
+    const { task } = await created.json();
+    await request.patch(`/api/tasks/${task.id}`, { headers: API_HEADERS, data: { completed: true } });
+
+    expect((await request.delete(`/api/tasks/${task.id}`, { headers: API_HEADERS })).status()).toBe(403);
+    expect(
+      (await request.delete(`/api/tasks/${task.id}`, { headers: API_HEADERS, data: { password: DELETE_PASSWORD } }))
+        .status()
+    ).toBe(204);
+  });
+
+  test("完了済みの一括削除も管理者と合言葉が要る", async ({ page, request }) => {
+    await registerAdmin(page);
     await addTasks(page, ["牛乳を買う", "レポートを書く", "ジムに行く"]);
     await completeTask(page, 0);
     await completeTask(page, 2);
 
+    // 合言葉なしで API を直接叩いても消えない
+    const res = await page.request.post("/api/tasks/clear-completed", { headers: API_HEADERS });
+    expect(res.status()).toBe(403);
+
     await page.click("#clear-completed");
+    await confirmDelete(page);
 
     await expect(page.locator(".task-item")).toHaveCount(1);
     await expect(page.locator("#task-count")).toHaveText("1 件のタスク（未完了 1 件）");
+  });
+
+  test("やめるを押すと削除されない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う"]);
+    await completeTask(page, 0);
+
+    await page.locator(".task-item").first().locator(".task-delete").click();
+    await page.click("#delete-cancel");
+
+    await expect(page.locator("#delete-dialog")).toBeHidden();
+    await expect(page.locator(".task-item")).toHaveCount(1);
   });
 });
 
@@ -561,16 +686,22 @@ test.describe("データベースへの保存", () => {
   });
 
   test("他のユーザーのタスクは表示・操作できない", async ({ page, browser, baseURL }) => {
-    await register(page);
+    // 削除の条件（管理者・完了済み・合言葉）をすべて満たしたうえで、
+    // それでも他人のタスクには手が届かないことを確かめる
+    await registerAdmin(page);
     await addTasks(page, ["自分だけのタスク"]);
+    await completeTask(page, 0);
     const taskId = await page.locator(".task-item").first().getAttribute("data-id");
 
     const other = await browser.newContext({ baseURL });
     const otherPage = await other.newPage();
-    await register(otherPage);
+    await registerAdmin(otherPage);
     await expect(otherPage.locator("#empty-state")).toBeVisible();
 
-    const res = await otherPage.request.delete(`/api/tasks/${taskId}`, { headers: API_HEADERS });
+    const res = await otherPage.request.delete(`/api/tasks/${taskId}`, {
+      headers: API_HEADERS,
+      data: { password: DELETE_PASSWORD },
+    });
     expect(res.status()).toBe(404);
     await other.close();
 
@@ -662,15 +793,18 @@ test.describe("コンソール", () => {
       if (m.type() === "error") errors.push(m.text());
     });
 
-    await register(page);
+    await registerAdmin(page);
     await addTasks(page, ["牛乳を買う", "レポートを書く"]);
     await completeTask(page, 0);
     await page.click('[data-filter="active"]');
     await page.click('[data-filter="completed"]');
     await page.click('[data-filter="all"]');
     await page.click("#clear-completed");
+    await confirmDelete(page);
     await expect(page.locator(".task-item")).toHaveCount(1);
+    await completeTask(page, 0);
     await page.locator(".task-item").first().locator(".task-delete").click();
+    await confirmDelete(page);
     await expect(page.locator(".task-item")).toHaveCount(0);
     await page.click("#task-view [data-logout]");
     await expect(page.locator("#auth-view")).toBeVisible();

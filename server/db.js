@@ -47,6 +47,14 @@ const MIGRATIONS = [
     );
     CREATE INDEX idx_email_tokens_user ON email_tokens(user_id, purpose);
   `,
+  // 3: 管理者フラグ（タスクを削除できるのは管理者だけ）
+  //    既存のデータベースでは全員が非管理者になり、誰もタスクを削除できなくなる。
+  //    最初に登録したユーザーを管理者にして、必ず1人は削除できる状態にしておく。
+  //    それ以外は ADMIN_EMAILS で指定する（起動時に同期される）。
+  `
+    ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;
+    UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users);
+  `,
 ];
 
 /** SQLite データベースを開き、未適用のマイグレーションを実行する（":memory:" も指定可） */

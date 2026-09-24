@@ -108,17 +108,45 @@
           <button class="filter-btn" data-filter="active">未完了</button>
           <button class="filter-btn" data-filter="completed">完了済み</button>
         </div>
-        <button id="clear-completed" class="btn btn-ghost">完了済みを削除</button>
+        <button id="clear-completed" class="btn btn-ghost" hidden>完了済みを削除</button>
       </div>
 
       <ul id="task-list" class="task-list"></ul>
 
       <p id="empty-state" class="empty-state" hidden>タスクはまだありません</p>
 
+      <p id="delete-hint" class="delete-hint" hidden>
+        タスクを削除できるのは管理者だけです。完了したタスクのみ、合言葉を入力すると削除できます。
+      </p>
+
       <footer class="app-footer">
         <span id="task-count">0 件のタスク</span>
       </footer>
     </section>
+
+    <!-- 削除の確認（合言葉） -->
+    <dialog id="delete-dialog" class="delete-dialog">
+      <form id="delete-form" method="dialog">
+        <h2 id="delete-title" class="delete-title">タスクを削除しますか？</h2>
+        <p id="delete-target" class="delete-target"></p>
+        <label class="field">
+          <span class="field-label">削除用の合言葉</span>
+          <input
+            type="password"
+            id="delete-password"
+            class="text-input"
+            autocomplete="off"
+            maxlength="128"
+            required
+          />
+        </label>
+        <p id="delete-error" class="form-error" role="alert" hidden></p>
+        <div class="delete-actions">
+          <button type="button" id="delete-cancel" class="btn btn-ghost">やめる</button>
+          <button type="submit" id="delete-confirm" class="btn btn-primary">削除する</button>
+        </div>
+      </form>
+    </dialog>
   </div>
 
   <script src="script.js"></script>
