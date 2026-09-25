@@ -15,6 +15,8 @@
   const STORAGE_KEY = "taskManagerApp.tasks";
   const DELETE_STATE_KEY = "taskManagerApp.deleteState";
   const MAX_TASK_LENGTH = 200;
+  // サーバー版の MAX_IMPORT_TASKS と同じ
+  const MAX_IMPORT_TASKS = 1000;
 
   // サーバー版の DELETE_PASSWORD にあたるもの。
   // 静的配信では値を隠せない（このファイルを読めば分かる）。
@@ -164,8 +166,29 @@
     }
 
     if (path === "/api/tasks/import" && method === "POST") {
-      // この版では localStorage そのものが保存先なので、取り込む先がない
-      return { tasks: sorted(readTasks()) };
+      // サーバー版の importTasks と同じ扱い。既存は消さず、読み込んだぶんを足す。
+      // 壊れた期日は捨ててタスク自体は取り込む
+      const incoming = Array.isArray(body?.tasks) ? body.tasks : null;
+      if (!incoming) fail(400, "リクエストの形式が正しくありません");
+      if (incoming.length > MAX_IMPORT_TASKS) {
+        fail(400, `一度に取り込めるのは ${MAX_IMPORT_TASKS} 件までです`);
+      }
+
+      const now = Date.now();
+      const tasks = readTasks();
+      for (const item of incoming) {
+        if (!item || typeof item.text !== "string" || !item.text.trim()) continue;
+        const createdAt = Number(item.createdAt);
+        tasks.push({
+          id: makeId(),
+          text: item.text.trim().slice(0, MAX_TASK_LENGTH),
+          completed: item.completed === true,
+          createdAt: Number.isFinite(createdAt) && createdAt > 0 && createdAt <= now ? createdAt : now,
+          dueDate: isValidDueDate(item.dueDate) ? item.dueDate : null,
+        });
+      }
+      writeTasks(tasks);
+      return { tasks: sorted(tasks) };
     }
 
     if (path === "/api/tasks/clear-completed" && method === "POST") {
