@@ -55,6 +55,12 @@ const MIGRATIONS = [
     ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;
     UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users);
   `,
+  // 4: タスクの期日（任意）。"YYYY-MM-DD" の文字列で持つ。
+  //    時刻もタイムゾーンも扱わない——「その日まで」しか意味しないため、
+  //    UTCミリ秒で持つと端末の時差で1日ずれる。
+  `
+    ALTER TABLE tasks ADD COLUMN due_date TEXT;
+  `,
 ];
 
 /** SQLite データベースを開き、未適用のマイグレーションを実行する（":memory:" も指定可） */
