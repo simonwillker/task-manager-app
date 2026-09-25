@@ -42,6 +42,7 @@
   const userEmail = $("user-email");
   const form = $("task-form");
   const input = $("task-input");
+  const dueInput = $("task-due");
   const taskError = $("task-error");
   const list = $("task-list");
   const emptyState = $("empty-state");
@@ -362,8 +363,8 @@
     notifyOtherTabs("tasks");
   }
 
-  async function addTask(text) {
-    const data = await api("POST", "/api/tasks", { text });
+  async function addTask(text, dueDate) {
+    const data = await api("POST", "/api/tasks", { text, dueDate: dueDate || null });
     tasks.unshift(data.task);
     afterChange();
   }
@@ -421,6 +422,26 @@
     if (deleteDialog.open) deleteDialog.close();
   }
 
+  /** きょうの日付を "YYYY-MM-DD" で返す（UTCではなく端末のローカル日付） */
+  function todayKey() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  /** 期日の見出し。きょう・あすは日付より言葉のほうが早く読める */
+  function dueLabel(dueDate) {
+    const today = todayKey();
+    if (dueDate === today) return "きょうまで";
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const pad = (n) => String(n).padStart(2, "0");
+    const tKey = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
+    if (dueDate === tKey) return "あすまで";
+    const [y, m, d] = dueDate.split("-");
+    return `${Number(m)}/${Number(d)} まで`;
+  }
+
   function getFilteredTasks() {
     if (currentFilter === "active") return tasks.filter((t) => !t.completed);
     if (currentFilter === "completed") return tasks.filter((t) => t.completed);
@@ -450,6 +471,20 @@
 
       li.appendChild(checkbox);
       li.appendChild(span);
+
+      if (task.dueDate) {
+        const due = document.createElement("span");
+        due.className = "task-due";
+        // 未完了で期日を過ぎたものだけ目立たせる。完了済みを赤くしても意味が無い
+        if (!task.completed && task.dueDate < todayKey()) {
+          due.classList.add("overdue");
+          due.title = "期日を過ぎています";
+        } else if (!task.completed && task.dueDate === todayKey()) {
+          due.classList.add("today");
+        }
+        due.textContent = dueLabel(task.dueDate);
+        li.appendChild(due);
+      }
 
       // 削除は「管理者」かつ「完了済み」のときだけ。未完了のあいだはボタンを押せなくして
       // 理由を出す（消えていると、なぜ消せないのか分からないため）
@@ -483,13 +518,19 @@
     e.preventDefault();
     const text = input.value.trim();
     if (!text) return;
+    const dueDate = dueInput.value;
     input.value = "";
+    dueInput.value = "";
     input.focus();
     run(async () => {
       try {
-        await addTask(text);
+        await addTask(text, dueDate);
       } catch (err) {
-        if (!input.value) input.value = text; // 失敗したら入力内容を戻す
+        // 失敗したら入力内容を戻す（期日も一緒に戻さないと入れ直しになる）
+        if (!input.value) {
+          input.value = text;
+          dueInput.value = dueDate;
+        }
         throw err;
       }
     });

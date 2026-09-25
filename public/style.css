@@ -394,3 +394,57 @@ body {
   cursor: not-allowed;
 }
 
+/* ---- タスクの期日 ---- */
+
+.task-form-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.due-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.due-label {
+  font-size: 0.75rem;
+  color: #777;
+}
+
+/* iOS Safari は date 入力の高さが文字サイズで決まるので、明示しておく */
+.due-input {
+  min-height: 42px;
+}
+
+.task-due {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: #666;
+  background: #f0f0f0;
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* 未完了で期日を過ぎたものだけ赤くする */
+.task-due.overdue {
+  background: #fdecea;
+  color: #b3261e;
+  font-weight: 600;
+}
+
+.task-due.today {
+  background: #fff4e5;
+  color: #9a5b00;
+  font-weight: 600;
+}
+
+.task-item.completed .task-due {
+  opacity: 0.5;
+}
+

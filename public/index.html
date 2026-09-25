@@ -97,7 +97,13 @@
           autocomplete="off"
           maxlength="200"
         />
-        <button type="submit" class="btn btn-primary">追加</button>
+        <div class="task-form-row">
+          <label class="due-field">
+            <span class="due-label">期日（任意）</span>
+            <input type="date" id="task-due" class="text-input due-input" />
+          </label>
+          <button type="submit" class="btn btn-primary">追加</button>
+        </div>
       </form>
 
       <p id="task-error" class="form-error" role="alert" hidden></p>

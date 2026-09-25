@@ -173,12 +173,34 @@ function parseTaskText(value) {
   return text;
 }
 
+/**
+ * 期日は "YYYY-MM-DD" のみ受け付ける。未指定・空文字は「期日なし」。
+ * 実在する日付かまで確かめる（2026-02-31 のような値を弾く）。
+ */
+function parseDueDate(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new HttpError(400, "期日は YYYY-MM-DD の形式で指定してください");
+  }
+  const [y, m, d] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    throw new HttpError(400, "存在しない日付です");
+  }
+  return value;
+}
+
 function toTask(row) {
   return {
     id: row.id,
     text: row.text,
     completed: Boolean(row.completed),
     createdAt: row.created_at,
+    dueDate: row.due_date || null,
   };
 }
 
@@ -272,14 +294,15 @@ function createApp({
     deleteExpiredEmailTokens: db.prepare("DELETE FROM email_tokens WHERE expires_at <= ?"),
 
     listTasks: db.prepare(`
-      SELECT id, text, completed, created_at FROM tasks
+      SELECT id, text, completed, created_at, due_date FROM tasks
       WHERE user_id = ? ORDER BY created_at DESC, rowid DESC
     `),
-    findTask: db.prepare("SELECT id, text, completed, created_at FROM tasks WHERE id = ? AND user_id = ?"),
+    findTask: db.prepare("SELECT id, text, completed, created_at, due_date FROM tasks WHERE id = ? AND user_id = ?"),
     insertTask: db.prepare(
-      "INSERT INTO tasks (id, user_id, text, completed, created_at) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO tasks (id, user_id, text, completed, created_at, due_date) VALUES (?, ?, ?, ?, ?, ?)"
     ),
     updateTaskCompleted: db.prepare("UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?"),
+    updateTaskDueDate: db.prepare("UPDATE tasks SET due_date = ? WHERE id = ? AND user_id = ?"),
     deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ? AND completed = 1"),
     deleteCompletedTasks: db.prepare("DELETE FROM tasks WHERE user_id = ? AND completed = 1"),
   };
@@ -555,9 +578,11 @@ function createApp({
   // ---- タスク API ----
 
   async function createTask(req, res, user) {
-    const text = parseTaskText((await readJson(req)).text);
+    const body = await readJson(req);
+    const text = parseTaskText(body.text);
+    const dueDate = parseDueDate(body.dueDate);
     const id = crypto.randomUUID();
-    stmts.insertTask.run(id, user.id, text, 0, Date.now());
+    stmts.insertTask.run(id, user.id, text, 0, Date.now(), dueDate);
     sendJson(res, 201, { task: toTask(stmts.findTask.get(id, user.id)) });
   }
 
@@ -574,12 +599,20 @@ function createApp({
       for (const item of tasks) {
         if (!item || typeof item.text !== "string" || !item.text.trim()) continue;
         const createdAt = Number(item.createdAt);
+        // 取り込み元の期日が壊れていても、そのタスク自体は取り込む
+        let dueDate = null;
+        try {
+          dueDate = parseDueDate(item.dueDate);
+        } catch (err) {
+          dueDate = null;
+        }
         stmts.insertTask.run(
           crypto.randomUUID(),
           user.id,
           item.text.trim().slice(0, MAX_TASK_LENGTH),
           item.completed === true ? 1 : 0,
-          Number.isFinite(createdAt) && createdAt > 0 && createdAt <= now ? createdAt : now
+          Number.isFinite(createdAt) && createdAt > 0 && createdAt <= now ? createdAt : now,
+          dueDate
         );
       }
     });
@@ -591,10 +624,22 @@ function createApp({
   }
 
   async function updateTask(req, res, user, id) {
-    const { completed } = await readJson(req);
-    if (typeof completed !== "boolean") throw invalidRequest();
-    const { changes } = stmts.updateTaskCompleted.run(completed ? 1 : 0, id, user.id);
-    if (changes === 0) throw new HttpError(404, "タスクが見つかりません");
+    const body = await readJson(req);
+    const hasCompleted = body.completed !== undefined;
+    const hasDueDate = Object.prototype.hasOwnProperty.call(body, "dueDate");
+    // どちらも来ていない更新は、何をしたいのか決まらないので受け付けない
+    if (!hasCompleted && !hasDueDate) throw invalidRequest();
+    if (hasCompleted && typeof body.completed !== "boolean") throw invalidRequest();
+
+    let changed = 0;
+    if (hasCompleted) {
+      changed += stmts.updateTaskCompleted.run(body.completed ? 1 : 0, id, user.id).changes;
+    }
+    if (hasDueDate) {
+      // null を渡せば期日を外せる
+      changed += stmts.updateTaskDueDate.run(parseDueDate(body.dueDate), id, user.id).changes;
+    }
+    if (changed === 0) throw new HttpError(404, "タスクが見つかりません");
     sendJson(res, 200, { task: toTask(stmts.findTask.get(id, user.id)) });
   }
 

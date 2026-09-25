@@ -118,6 +118,22 @@ async function addTasks(page, texts) {
   }
 }
 
+/** 期日を指定してタスクを1件追加する */
+async function addTaskWithDue(page, text, dueDate) {
+  await page.fill("#task-input", text);
+  await page.fill("#task-due", dueDate);
+  await page.click("#task-form .btn-primary");
+  await expect(page.locator(".task-text").first()).toHaveText(text);
+}
+
+/** きょうから offset 日後の日付を "YYYY-MM-DD" で返す */
+function dateKey(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 /** 管理者として登録し、メールアドレスの確認まで済ませる */
 function registerAdmin(page) {
   return register(page, uniqueAdminEmail());
@@ -537,6 +553,107 @@ test.describe("フィルタ", () => {
 
     await expect(page.locator('[data-filter="active"]')).toHaveClass(/active/);
     await expect(page.locator('[data-filter="all"]')).not.toHaveClass(/active/);
+  });
+});
+
+test.describe("期日", () => {
+  test("期日を指定して追加すると、タスクに表示される", async ({ page }) => {
+    await register(page);
+    await addTaskWithDue(page, "請求書を送る", dateKey(3));
+
+    const due = page.locator(".task-item").first().locator(".task-due");
+    await expect(due).toBeVisible();
+    const [, m, d] = dateKey(3).split("-");
+    await expect(due).toHaveText(`${Number(m)}/${Number(d)} まで`);
+  });
+
+  test("きょうが期日なら「きょうまで」と出る", async ({ page }) => {
+    await register(page);
+    await addTaskWithDue(page, "きょうの用事", dateKey(0));
+
+    const due = page.locator(".task-item").first().locator(".task-due");
+    await expect(due).toHaveText("きょうまで");
+    await expect(due).toHaveClass(/today/);
+  });
+
+  test("期日を過ぎた未完了タスクは強調され、完了にすると外れる", async ({ page }) => {
+    await register(page);
+    await addTaskWithDue(page, "遅れている仕事", dateKey(-1));
+
+    const item = page.locator(".task-item").first();
+    await expect(item.locator(".task-due")).toHaveClass(/overdue/);
+
+    await completeTask(page, 0);
+    await expect(item.locator(".task-due")).not.toHaveClass(/overdue/);
+  });
+
+  test("期日を指定しなければ表示されない", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["期日なしのタスク"]);
+    await expect(page.locator(".task-item").first().locator(".task-due")).toHaveCount(0);
+  });
+
+  test("期日はリロード後も保持される", async ({ page }) => {
+    await register(page);
+    await addTaskWithDue(page, "来週の準備", dateKey(7));
+    await page.reload();
+    await expect(page.locator(".task-item").first().locator(".task-due")).toBeVisible();
+  });
+
+  test("追加に失敗したとき、入力した期日も戻る", async ({ page, context }) => {
+    await register(page);
+    await context.setOffline(true);
+    await page.fill("#task-input", "通信できないタスク");
+    await page.fill("#task-due", dateKey(2));
+    await page.click("#task-form .btn-primary");
+    await expect(page.locator("#task-error")).toBeVisible();
+    await expect(page.locator("#task-input")).toHaveValue("通信できないタスク");
+    await expect(page.locator("#task-due")).toHaveValue(dateKey(2));
+    await context.setOffline(false);
+  });
+
+  test("不正な日付は API が拒否する", async ({ request }) => {
+    await registerVerifiedViaApi(request);
+    for (const bad of ["2026-02-31", "2026/01/01", "01-01-2026", "きょう"]) {
+      const res = await request.post("/api/tasks", {
+        headers: API_HEADERS,
+        data: { text: "だめな期日", dueDate: bad },
+      });
+      expect(res.status(), `${bad} は拒否されるべき`).toBe(400);
+    }
+  });
+
+  test("API から期日を後付け・削除できる", async ({ request }) => {
+    await registerVerifiedViaApi(request);
+    const created = await request.post("/api/tasks", {
+      headers: API_HEADERS,
+      data: { text: "あとで期日をつける" },
+    });
+    const { task } = await created.json();
+    expect(task.dueDate).toBeNull();
+
+    const set = await request.patch(`/api/tasks/${task.id}`, {
+      headers: API_HEADERS,
+      data: { dueDate: dateKey(5) },
+    });
+    expect((await set.json()).task.dueDate).toBe(dateKey(5));
+
+    const cleared = await request.patch(`/api/tasks/${task.id}`, {
+      headers: API_HEADERS,
+      data: { dueDate: null },
+    });
+    expect((await cleared.json()).task.dueDate).toBeNull();
+  });
+
+  test("localStorage からの引き継ぎでも期日が残る", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate((due) => {
+      localStorage.setItem("taskManagerApp.tasks", JSON.stringify([
+        { id: "x1", text: "引き継ぐタスク", completed: false, createdAt: Date.now(), dueDate: due },
+      ]));
+    }, dateKey(4));
+    await register(page);
+    await expect(page.locator(".task-item").first().locator(".task-due")).toBeVisible();
   });
 });
 
