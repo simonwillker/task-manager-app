@@ -173,6 +173,12 @@ test.describe("GitHub Pages 用の静的版", () => {
     await expect(page.locator(".task-text", { hasText: "鍵をかける" })).toBeVisible();
   });
 
+  test("削除の説明に「管理者だけ」と書かない（この版に管理者はいない）", async ({ page }) => {
+    await open(page);
+    await expect(page.locator("#delete-hint")).toContainText("合言葉を入力すると削除できます");
+    await expect(page.locator("#delete-hint")).not.toContainText("管理者");
+  });
+
   test("サーバーへの通信が一切発生しない", async ({ page }) => {
     const apiCalls = [];
     page.on("request", (req) => {

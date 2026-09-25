@@ -159,6 +159,10 @@
     // ログインが無い版では、アカウント関係の導線を出さない
     userBar.hidden = LOCAL_MODE;
     localNote.hidden = !LOCAL_MODE;
+    // 「管理者だけ」はアカウントのある版だけの話。静的版で言うと事実と違う
+    deleteHint.textContent = LOCAL_MODE
+      ? "完了したタスクのみ、合言葉を入力すると削除できます。"
+      : "タスクを削除できるのは管理者だけです。完了したタスクのみ、合言葉を入力すると削除できます。";
     showMessage(taskError, "");
     await run(async () => {
       // 引き継ぎに失敗しても、サーバー上のタスクは表示する（localStorage 側は残るので次回再試行される）
