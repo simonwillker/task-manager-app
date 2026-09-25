@@ -32,3 +32,6 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
+
+# GitHub Pages 用の組み立て結果（scripts/build-static.js が作る）
+site/

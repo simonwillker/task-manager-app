@@ -181,6 +181,11 @@ body {
   cursor: default;
 }
 
+/* display の指定は [hidden] より強いので、隠すときの指定を別に置く */
+.user-bar[hidden] {
+  display: none;
+}
+
 .user-bar {
   display: flex;
   align-items: center;
@@ -448,3 +453,14 @@ body {
   opacity: 0.5;
 }
 
+
+/* サーバーを使わない版（GitHub Pages）だけに出る断り書き */
+.local-note {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
