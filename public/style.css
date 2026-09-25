@@ -464,3 +464,28 @@ body {
   font-size: 0.85rem;
   line-height: 1.6;
 }
+
+/* ---- 書き出し / 読み込み ---- */
+
+.data-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* 書き出した本文。長いので折り返して、等幅で見せる */
+.data-text {
+  width: 100%;
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* 3つ並ぶと幅が足りないので、狭い画面では折り返す */
+.delete-actions {
+  flex-wrap: wrap;
+}

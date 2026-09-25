@@ -58,6 +58,20 @@
   const emptyState = $("empty-state");
   const countLabel = $("task-count");
   const clearCompletedBtn = $("clear-completed");
+  const exportBtn = $("export-tasks");
+  const importBtn = $("import-tasks");
+  const exportDialog = $("export-dialog");
+  const exportText = $("export-text");
+  const exportNote = $("export-note");
+  const exportCopyBtn = $("export-copy");
+  const exportDownloadBtn = $("export-download");
+  const exportCloseBtn = $("export-close");
+  const importDialog = $("import-dialog");
+  const importFile = $("import-file");
+  const importText = $("import-text");
+  const importError = $("import-error");
+  const importConfirmBtn = $("import-confirm");
+  const importCancelBtn = $("import-cancel");
   const deleteHint = $("delete-hint");
   const deleteDialog = $("delete-dialog");
   const deleteForm = $("delete-form");
@@ -434,6 +448,132 @@
    * @param {string} message 何を消すのかの説明
    * @param {(password: string) => Promise<void>} action
    */
+  // ---- 書き出し / 読み込み ----
+
+  /** 書き出す形。version を持たせて、後で形を変えたときに見分けられるようにする */
+  const EXPORT_FORMAT = "task-manager-app";
+  const EXPORT_VERSION = 1;
+  /** サーバー側の MAX_IMPORT_TASKS と同じ。読み込む前に画面側でも弾く */
+  const MAX_IMPORT_TASKS = 1000;
+
+  function buildExport() {
+    return JSON.stringify(
+      {
+        format: EXPORT_FORMAT,
+        version: EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+        tasks: tasks.map((t) => ({
+          text: t.text,
+          completed: t.completed,
+          createdAt: t.createdAt,
+          dueDate: t.dueDate || null,
+        })),
+      },
+      null,
+      2
+    );
+  }
+
+  function openExport() {
+    exportText.value = buildExport();
+    showMessage(exportNote, "");
+    exportDialog.showModal();
+    // showModal() が textarea に焦点を当てると末尾が見えるので、先頭に戻す
+    exportText.scrollTop = 0;
+  }
+
+  function downloadExport() {
+    const stamp = todayKey();
+    const blob = new Blob([exportText.value], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tasks-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // すぐ解放すると保存前に切れる環境があるため、少し待ってから開放する
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  async function copyExport() {
+    try {
+      await navigator.clipboard.writeText(exportText.value);
+      exportNote.dataset.kind = "success";
+      showMessage(exportNote, "コピーしました");
+    } catch {
+      // 権限が無い環境では選択だけしておき、利用者が自分でコピーする
+      exportText.select();
+      exportNote.dataset.kind = "error";
+      showMessage(exportNote, "コピーできませんでした。選択してあるので手動でコピーしてください");
+    }
+  }
+
+  /**
+   * 読み込む本文を解釈する。書き出した形のほか、タスクの配列だけでも受ける
+   * （古い版が localStorage に持っていた形がそれなので、手で移したい人のため）。
+   */
+  function parseImport(raw) {
+    const text = raw.trim();
+    if (!text) throw new Error("読み込む内容がありません");
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("ファイルの形式が正しくありません");
+    }
+    const list = Array.isArray(data) ? data : data && data.tasks;
+    if (!Array.isArray(list)) throw new Error("タスクが見つかりません");
+    const usable = list.filter((t) => t && typeof t.text === "string" && t.text.trim());
+    if (usable.length === 0) throw new Error("取り込めるタスクがありません");
+    if (usable.length > MAX_IMPORT_TASKS) {
+      throw new Error(`一度に読み込めるのは ${MAX_IMPORT_TASKS} 件までです`);
+    }
+    return usable;
+  }
+
+  function openImport() {
+    importFile.value = "";
+    importText.value = "";
+    showMessage(importError, "");
+    importDialog.showModal();
+  }
+
+  async function runImport() {
+    showMessage(importError, "");
+    let raw = importText.value;
+    if (importFile.files && importFile.files[0]) raw = await importFile.files[0].text();
+
+    let list;
+    try {
+      list = parseImport(raw);
+    } catch (err) {
+      showMessage(importError, err.message);
+      return;
+    }
+
+    importConfirmBtn.disabled = true;
+    try {
+      const data = await api("POST", "/api/tasks/import", { tasks: list });
+      tasks = data.tasks;
+      importDialog.close();
+      afterChange();
+      showMessage(taskError, "");
+    } catch (err) {
+      showMessage(importError, err.message);
+    } finally {
+      importConfirmBtn.disabled = false;
+    }
+  }
+
+  exportBtn.addEventListener("click", openExport);
+  exportCopyBtn.addEventListener("click", copyExport);
+  exportDownloadBtn.addEventListener("click", downloadExport);
+  exportCloseBtn.addEventListener("click", () => exportDialog.close());
+  importBtn.addEventListener("click", openImport);
+  importCancelBtn.addEventListener("click", () => importDialog.close());
+  importConfirmBtn.addEventListener("click", runImport);
+
   function confirmDelete(message, action) {
     pendingDelete = action;
     deleteTarget.textContent = message;

@@ -133,9 +133,46 @@
       <footer class="app-footer">
         <span id="task-count">0 件のタスク</span>
       </footer>
+
+      <div class="data-actions">
+        <button type="button" id="export-tasks" class="link-btn">タスクを書き出す</button>
+        <button type="button" id="import-tasks" class="link-btn">タスクを読み込む</button>
+      </div>
     </section>
 
     <!-- 削除の確認（合言葉） -->
+    <!-- 書き出し。端末間で持ち運べるよう、ファイル保存と本文コピーの両方を用意する -->
+    <dialog id="export-dialog" class="delete-dialog">
+      <h2 class="delete-title">タスクを書き出す</h2>
+      <p class="delete-target">このまま保存するか、本文をコピーして移し先で貼り付けてください。</p>
+      <textarea id="export-text" class="text-input data-text" readonly rows="6"></textarea>
+      <p id="export-note" class="form-notice" role="status" hidden></p>
+      <div class="delete-actions">
+        <button type="button" id="export-close" class="btn btn-ghost">閉じる</button>
+        <button type="button" id="export-copy" class="btn btn-ghost">コピー</button>
+        <button type="button" id="export-download" class="btn btn-primary">ファイルに保存</button>
+      </div>
+    </dialog>
+
+    <!-- 読み込み。ファイルを選ぶか、書き出した本文を貼り付ける -->
+    <dialog id="import-dialog" class="delete-dialog">
+      <h2 class="delete-title">タスクを読み込む</h2>
+      <p class="delete-target">今あるタスクは消えません。読み込んだぶんが追加されます。</p>
+      <label class="field">
+        <span class="field-label">ファイルを選ぶ</span>
+        <input type="file" id="import-file" accept="application/json,.json" class="text-input" />
+      </label>
+      <label class="field">
+        <span class="field-label">または、書き出した本文を貼り付ける</span>
+        <textarea id="import-text" class="text-input data-text" rows="6"></textarea>
+      </label>
+      <p id="import-error" class="form-error" role="alert" hidden></p>
+      <div class="delete-actions">
+        <button type="button" id="import-cancel" class="btn btn-ghost">やめる</button>
+        <button type="button" id="import-confirm" class="btn btn-primary">読み込む</button>
+      </div>
+    </dialog>
+
     <dialog id="delete-dialog" class="delete-dialog">
       <form id="delete-form" method="dialog">
         <h2 id="delete-title" class="delete-title">タスクを削除しますか？</h2>

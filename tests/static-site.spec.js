@@ -190,3 +190,78 @@ test.describe("GitHub Pages 用の静的版", () => {
     expect(apiCalls).toEqual([]);
   });
 });
+
+test.describe("静的版の書き出し・読み込み", () => {
+  test("書き出した本文に今のタスクが入っている", async ({ page }) => {
+    await open(page);
+    await addTask(page, "買い物");
+    await page.click("#export-tasks");
+    const raw = await page.inputValue("#export-text");
+    const data = JSON.parse(raw);
+    expect(data.format).toBe("task-manager-app");
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0]).toMatchObject({ text: "買い物", completed: false, dueDate: null });
+  });
+
+  test("読み込んだタスクが追加され、今あるタスクは消えない", async ({ page }) => {
+    await open(page);
+    await addTask(page, "もとからあるもの");
+
+    await page.click("#import-tasks");
+    await page.fill(
+      "#import-text",
+      JSON.stringify({
+        format: "task-manager-app",
+        version: 1,
+        tasks: [
+          { text: "よそから来たもの", completed: false, createdAt: 1758000000000, dueDate: null },
+          { text: "完了済みのもの", completed: true, createdAt: 1758000001000, dueDate: null },
+        ],
+      })
+    );
+    await page.click("#import-confirm");
+
+    await expect(page.locator(".task-text", { hasText: "よそから来たもの" })).toBeVisible();
+    await expect(page.locator(".task-text", { hasText: "完了済みのもの" })).toBeVisible();
+    await expect(page.locator(".task-text", { hasText: "もとからあるもの" })).toBeVisible();
+    await expect(page.locator(".task-item")).toHaveCount(3);
+  });
+
+  test("壊れた本文は読み込まず、理由を出す", async ({ page }) => {
+    await open(page);
+    await addTask(page, "残るもの");
+
+    await page.click("#import-tasks");
+    await page.fill("#import-text", "これはJSONではありません");
+    await page.click("#import-confirm");
+
+    await expect(page.locator("#import-error")).toContainText("形式が正しくありません");
+    await expect(page.locator(".task-item")).toHaveCount(1);
+  });
+
+  test("書き出した本文をそのまま読み込める", async ({ page }) => {
+    await open(page);
+    await addTask(page, "往復するもの");
+    await page.click("#export-tasks");
+    const raw = await page.inputValue("#export-text");
+    await page.click("#export-close");
+
+    await page.click("#import-tasks");
+    await page.fill("#import-text", raw);
+    await page.click("#import-confirm");
+
+    // 同じ内容が2件になる（読み込みは追加であって置き換えではない）
+    await expect(page.locator(".task-text", { hasText: "往復するもの" })).toHaveCount(2);
+  });
+
+  test("タスクの配列だけでも読み込める（古い形からの移行）", async ({ page }) => {
+    await open(page);
+    await page.click("#import-tasks");
+    await page.fill(
+      "#import-text",
+      JSON.stringify([{ id: "old-1", text: "古い形のタスク", completed: false, createdAt: 1758000000000 }])
+    );
+    await page.click("#import-confirm");
+    await expect(page.locator(".task-text", { hasText: "古い形のタスク" })).toBeVisible();
+  });
+});

@@ -929,3 +929,71 @@ test.describe("コンソール", () => {
     expect(errors).toEqual([]);
   });
 });
+
+test.describe("書き出し・読み込み（サーバー版）", () => {
+  test("書き出した本文に自分のタスクだけが入っている", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["自分のタスク"]);
+
+    await page.click("#export-tasks");
+    const data = JSON.parse(await page.inputValue("#export-text"));
+    expect(data.format).toBe("task-manager-app");
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0]).toMatchObject({ text: "自分のタスク", completed: false });
+  });
+
+  test("読み込んだタスクが追加され、期日も引き継がれる", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["もとからあるもの"]);
+
+    await page.click("#import-tasks");
+    await page.fill(
+      "#import-text",
+      JSON.stringify({
+        format: "task-manager-app",
+        version: 1,
+        tasks: [{ text: "読み込んだもの", completed: false, createdAt: 1758000000000, dueDate: "2030-05-06" }],
+      })
+    );
+    await page.click("#import-confirm");
+
+    await expect(page.locator(".task-item")).toHaveCount(2);
+    const item = page.locator(".task-item", { hasText: "読み込んだもの" });
+    await expect(item.locator(".task-due")).toHaveText("5/6 まで");
+  });
+
+  test("壊れた期日は捨てて、タスク自体は取り込む", async ({ page }) => {
+    await register(page);
+    await page.click("#import-tasks");
+    await page.fill(
+      "#import-text",
+      JSON.stringify({ tasks: [{ text: "期日が壊れたもの", completed: false, dueDate: "2026-02-30" }] })
+    );
+    await page.click("#import-confirm");
+
+    const item = page.locator(".task-item", { hasText: "期日が壊れたもの" });
+    await expect(item).toBeVisible();
+    await expect(item.locator(".task-due")).toHaveCount(0);
+  });
+
+  test("読み込んだタスクは他のアカウントからは見えない", async ({ page, browser }) => {
+    await register(page);
+    await page.click("#import-tasks");
+    await page.fill("#import-text", JSON.stringify({ tasks: [{ text: "秘密のタスク" }] }));
+    await page.click("#import-confirm");
+    await expect(page.locator(".task-text", { hasText: "秘密のタスク" })).toBeVisible();
+
+    const other = await browser.newPage();
+    await register(other);
+    await expect(other.locator(".task-item")).toHaveCount(0);
+    await other.close();
+  });
+
+  test("壊れた本文はサーバーに送らずに弾く", async ({ page }) => {
+    await register(page);
+    await page.click("#import-tasks");
+    await page.fill("#import-text", "{ これは JSON ではない");
+    await page.click("#import-confirm");
+    await expect(page.locator("#import-error")).toContainText("形式が正しくありません");
+  });
+});
