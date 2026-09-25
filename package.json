@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "node server/index.js",
+    "build:static": "node scripts/build-static.js",
+    "serve:static": "node scripts/build-static.js && node scripts/serve-static.js",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "test:report": "playwright show-report"

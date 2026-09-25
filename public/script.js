@@ -1,6 +1,14 @@
 (() => {
   "use strict";
 
+  /**
+   * 動作モード（mode.js が決める）。
+   *   "server" … server/ の API を使う。ログインあり、端末をまたいで同じデータ
+   *   "local"  … localBackend.js が localStorage を読み書きする。ログインなし、端末ごと
+   * GitHub Pages のような静的配信ではサーバーを動かせないので "local" を使う。
+   */
+  const LOCAL_MODE = window.TASK_APP_MODE === "local";
+
   /** 以前のバージョンがタスクを保存していた localStorage のキー（初回ログイン時にアカウントへ取り込む） */
   const LEGACY_STORAGE_KEY = "taskManagerApp.tasks";
   const REQUEST_TIMEOUT_MS = 15000;
@@ -40,6 +48,8 @@
   const verifyResend = $("verify-resend");
 
   const userEmail = $("user-email");
+  const userBar = document.querySelector(".user-bar");
+  const localNote = $("local-note");
   const form = $("task-form");
   const input = $("task-input");
   const dueInput = $("task-due");
@@ -80,6 +90,9 @@
   // ---- API ----
 
   async function api(method, url, body) {
+    // サーバーを使わない版では、同じ呼び出しを localStorage 側で処理する
+    if (LOCAL_MODE) return window.TaskAppLocalBackend.request(method, url, body);
+
     const headers = { "X-Requested-With": "fetch" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
 
@@ -143,6 +156,9 @@
     clearCompletedBtn.hidden = !isAdmin;
     deleteHint.hidden = !isAdmin;
     userEmail.textContent = user.email;
+    // ログインが無い版では、アカウント関係の導線を出さない
+    userBar.hidden = LOCAL_MODE;
+    localNote.hidden = !LOCAL_MODE;
     showMessage(taskError, "");
     await run(async () => {
       // 引き継ぎに失敗しても、サーバー上のタスクは表示する（localStorage 側は残るので次回再試行される）
@@ -206,6 +222,9 @@
 
   /** URL の # 以降に付いたメールのリンク（確認・再設定）を処理してから画面を表示する */
   async function start() {
+    // メールの確認・再設定リンクはサーバー版だけの仕組み
+    if (LOCAL_MODE) return init();
+
     const params = new URLSearchParams(location.hash.slice(1));
     const verifyToken = params.get("verify");
     const passwordResetToken = params.get("reset");
@@ -336,6 +355,10 @@
 
   /** 以前のバージョンで localStorage に保存したタスクを、ログイン中のアカウントに移す */
   async function importLegacyTasks() {
+    // サーバーを使わない版では、この localStorage のキーそのものが保存先。
+    // 取り込んで消す相手がいない（消すとタスクが全部なくなる）
+    if (LOCAL_MODE) return;
+
     let legacy;
     try {
       legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || "null");

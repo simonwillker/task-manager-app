@@ -88,6 +88,12 @@
         <button type="button" class="btn btn-ghost" data-logout>ログアウト</button>
       </div>
 
+      <p id="local-note" class="local-note" hidden>
+        この版はタスクをこの端末の中だけに保存します。ほかの端末とは共有されません。
+        削除には合言葉が必要ですが、画面を操作せずに消すこともできるため、
+        確実に守りたい場合はサーバー版を使ってください。
+      </p>
+
       <form id="task-form" class="task-form">
         <input
           type="text"
@@ -155,6 +161,8 @@
     </dialog>
   </div>
 
+  <script src="mode.js"></script>
+  <script src="localBackend.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

@@ -1,0 +1,56 @@
+# GitHub Pages には、サーバーを使わない版（site/）を出す。
+# サーバー版（Fly.io）とは別物で、データは端末の中だけに保存される。
+name: GitHub Pages へデプロイ
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同時に走らせない。ただし実行中のデプロイは中断しない
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 静的サイトを組み立てる
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 依存関係をインストール
+        run: npm ci
+
+      - name: site/ を組み立てる
+        run: npm run build:static
+
+      - name: 静的版のテスト
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test --project=static
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: 公開する
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

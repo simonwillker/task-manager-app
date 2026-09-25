@@ -1,6 +1,20 @@
 # タスク管理アプリ (Task Manager App)
 
-**公開 URL: https://simonwillker-task-manager.fly.dev/**
+このアプリには**2つの版**があります。中身（画面・操作）は同じで、タスクの保存先だけが違います。
+
+| | サーバー版 | 静的版 |
+|---|---|---|
+| 公開先 | Fly.io（<https://simonwillker-task-manager.fly.dev/>） | GitHub Pages（<https://simonwillker.github.io/task-manager-app/>） |
+| 保存先 | サーバーの SQLite | その端末のブラウザ（`localStorage`） |
+| ログイン | あり | なし |
+| 端末をまたいで同じタスク | **できる** | できない（端末ごとに別） |
+| 削除の条件 | 管理者・完了済み・合言葉（**サーバーが判定**） | 完了済み・合言葉（**画面側だけの判定**） |
+| デプロイ | [deploy.yml](.github/workflows/deploy.yml)（`FLY_API_TOKEN` が必要） | [pages.yml](.github/workflows/pages.yml)（設定不要） |
+
+静的版は、サーバーを用意しなくてもすぐ使えるかわりに、**削除の制限を確実には守れません**。
+ブラウザの開発者ツールを使えば合言葉を入れずに消せますし、合言葉そのものも
+[public/localBackend.js](public/localBackend.js) に書いてあるので秘密にはできません。
+「うっかり消さないための歯止め」として割り切っています。確実に守りたいときはサーバー版を使ってください。
 
 バニラ JavaScript と Node.js で作った、シンプルなタスク管理（ToDo）Web アプリです。
 タスクはサーバーのデータベース（SQLite）に保存されるため、ログインすればどの端末・どのブラウザからでも同じタスクを使えます。
@@ -37,9 +51,29 @@ npm start
 ローカルでは実際のメールは送信されず、確認メールや再設定メールの内容（リンク）がサーバーのログに出力されます。
 新規登録したら、ログに表示された `http://127.0.0.1:3000/#verify=...` を開いてください。
 
+## 静的版（GitHub Pages）
+
+`main` への push で [pages.yml](.github/workflows/pages.yml) が動き、`site/` を組み立てて GitHub Pages へ公開します。
+Secrets の設定は要りません。リポジトリの Settings → Pages で Source を **GitHub Actions** にしておいてください。
+
+組み立ては [scripts/build-static.js](scripts/build-static.js) が `public/` を `site/` に写し、
+`mode.js` だけを差し替えるだけです。画面のコードは2つの版で共通で、
+[public/localBackend.js](public/localBackend.js) がサーバーの API と同じ形の応答を
+`localStorage` から作って返します。
+
+手元で確認するには:
+
+```bash
+npm run serve:static
+# http://127.0.0.1:8766/ を開く
+```
+
+保存先は `localStorage` の `taskManagerApp.tasks` です。
+以前 GitHub Pages で配信していた版と同じキー・同じ形なので、すでに端末に入っているタスクはそのまま引き継がれます。
+
 ## 本番環境に公開する（Fly.io）
 
-サーバーと DB が必要なため、静的ファイルしか配信できない GitHub Pages では動きません。[Fly.io](https://fly.io) で公開します。
+サーバー版は DB が必要なため、静的ファイルしか配信できない GitHub Pages では動きません。[Fly.io](https://fly.io) で公開します。
 
 `main` ブランチへの push をトリガーに、GitHub Actions（[.github/workflows/deploy.yml](.github/workflows/deploy.yml)）が次の順に実行します。
 
@@ -72,6 +106,9 @@ fly tokens create deploy --app simonwillker-task-manager --expiry 8760h | gh sec
 
 登録後、Actions 画面から「CI / Deploy to Fly.io」を **Run workflow** するか、`main` に push するとデプロイされます。
 `FLY_API_TOKEN` が未登録の間は、デプロイの手順だけが警告付きでスキップされます。
+**このときワークフロー自体は成功（緑）になります。**
+実際にデプロイされたかは、実行結果の「Fly.io へデプロイ」ジョブを開き、
+「デプロイ」の手順が skipped になっていないかで確かめてください。
 
 アプリ名（`simonwillker-task-manager`）は Fly.io 全体で一意です。使えない場合は別の名前にし、`fly.toml` の `app` と `APP_BASE_URL`、ワークフローの `url` を合わせて変更してください。
 独自ドメインを使う場合は `fly certs add <ドメイン>` を実行し、`APP_BASE_URL` をそのドメインに変更します。
