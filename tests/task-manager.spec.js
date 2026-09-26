@@ -775,6 +775,305 @@ test.describe("削除", () => {
   });
 });
 
+test.describe("編集", () => {
+  test("内容と期日をまとめて書き換えられる", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["牛乳を買う"]);
+
+    await page.locator(".task-item").first().locator(".task-edit").click();
+    await expect(page.locator("#edit-dialog")).toBeVisible();
+    await expect(page.locator("#edit-text")).toHaveValue("牛乳を買う");
+    await page.fill("#edit-text", "低脂肪乳を買う");
+    await page.fill("#edit-due", dateKey(0));
+    await page.click("#edit-save");
+
+    await expect(page.locator("#edit-dialog")).toBeHidden();
+    await expect(page.locator(".task-text").first()).toHaveText("低脂肪乳を買う");
+    await expect(page.locator(".task-due").first()).toHaveText("きょうまで");
+
+    // 画面の書き換えではなく、保存されていることを確かめる
+    await page.reload();
+    await expect(page.locator(".task-text").first()).toHaveText("低脂肪乳を買う");
+  });
+
+  test("期日を空にすると期日が外れる", async ({ page }) => {
+    await register(page);
+    await addTaskWithDue(page, "レポートを書く", dateKey(3));
+    await expect(page.locator(".task-due")).toHaveCount(1);
+
+    await page.locator(".task-item").first().locator(".task-edit").click();
+    await page.fill("#edit-due", "");
+    await page.click("#edit-save");
+
+    await expect(page.locator(".task-due")).toHaveCount(0);
+  });
+
+  test("やめるを押すと書き換えられない", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["牛乳を買う"]);
+
+    await page.locator(".task-item").first().locator(".task-edit").click();
+    await page.fill("#edit-text", "別の内容");
+    await page.click("#edit-cancel");
+
+    await expect(page.locator("#edit-dialog")).toBeHidden();
+    await expect(page.locator(".task-text").first()).toHaveText("牛乳を買う");
+  });
+
+  test("空白だけの内容には書き換えられない", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["牛乳を買う"]);
+
+    await page.locator(".task-item").first().locator(".task-edit").click();
+    await page.fill("#edit-text", "   ");
+    await page.click("#edit-save");
+
+    await expect(page.locator("#edit-error")).toHaveText("タスクを入力してください");
+    await expect(page.locator(".task-text").first()).toHaveText("牛乳を買う");
+  });
+
+  test("編集は管理者でなくてもでき、合言葉も要らない", async ({ page, request }) => {
+    await register(page);
+    await addTasks(page, ["牛乳を買う"]);
+
+    // 一般ユーザーにも編集ボタンは出る（削除ボタンは出ない）
+    await expect(page.locator(".task-item").first().locator(".task-edit")).toHaveCount(1);
+    await expect(page.locator(".task-item").first().locator(".task-delete")).toHaveCount(0);
+
+    const id = await page.locator(".task-item").first().getAttribute("data-id");
+    const res = await page.request.patch(`/api/tasks/${id}`, {
+      headers: API_HEADERS,
+      data: { text: "API から書き換えた" },
+    });
+    expect(res.status()).toBe(200);
+    expect((await res.json()).task.text).toBe("API から書き換えた");
+  });
+
+  test("200 文字を超える内容は受け付けない", async ({ request }) => {
+    await registerVerifiedViaApi(request);
+    const created = await request.post("/api/tasks", { headers: API_HEADERS, data: { text: "短い" } });
+    const { task } = await created.json();
+
+    const res = await request.patch(`/api/tasks/${task.id}`, {
+      headers: API_HEADERS,
+      data: { text: "あ".repeat(201) },
+    });
+    expect(res.status()).toBe(400);
+  });
+
+  test("変更する内容が無い PATCH は受け付けない", async ({ request }) => {
+    await registerVerifiedViaApi(request);
+    const created = await request.post("/api/tasks", { headers: API_HEADERS, data: { text: "短い" } });
+    const { task } = await created.json();
+
+    const res = await request.patch(`/api/tasks/${task.id}`, { headers: API_HEADERS, data: {} });
+    expect(res.status()).toBe(400);
+  });
+});
+
+test.describe("選んでまとめて削除", () => {
+  test("選んだ完了済みのタスクだけがまとめて消える", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う", "レポートを書く", "ジムに行く"]);
+    // 一覧は新しい順なので ジムに行く / レポートを書く / 牛乳を買う の並び
+    await completeTask(page, 0);
+    await completeTask(page, 1);
+    await completeTask(page, 2);
+
+    await page.click("#select-mode");
+    await expect(page.locator("#selection-bar")).toBeVisible();
+    await page.locator(".task-item").nth(0).locator(".task-select").check();
+    await page.locator(".task-item").nth(2).locator(".task-select").check();
+    await expect(page.locator("#selection-count")).toHaveText("2 件を選択中");
+    await expect(page.locator("#delete-selected")).toHaveText("選択した 2 件を削除");
+
+    await page.click("#delete-selected");
+    await confirmDelete(page);
+
+    await expect(page.locator(".task-item")).toHaveCount(1);
+    await expect(page.locator(".task-text").first()).toHaveText("レポートを書く");
+    // 消し終わったら選択モードから抜ける
+    await expect(page.locator("#selection-bar")).toBeHidden();
+  });
+
+  test("未完了のタスクは選べない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う"]);
+
+    await page.click("#select-mode");
+    const select = page.locator(".task-item").first().locator(".task-select");
+    await expect(select).toBeDisabled();
+    await expect(select).toHaveAttribute("title", "完了していないタスクは削除できません");
+    await expect(page.locator("#delete-selected")).toBeDisabled();
+  });
+
+  test("表示中の完了済みをまとめて選べる", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う", "レポートを書く", "ジムに行く"]);
+    await completeTask(page, 0);
+    await completeTask(page, 2);
+
+    await page.click("#select-mode");
+    await page.click("#select-visible");
+    await expect(page.locator("#selection-count")).toHaveText("2 件を選択中");
+
+    await page.click("#selection-clear");
+    await expect(page.locator("#selection-count")).toHaveText("0 件を選択中");
+  });
+
+  test("絞り込み中は表示されていないタスクを選ばない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う", "レポートを書く"]);
+    await completeTask(page, 0);
+    await completeTask(page, 1);
+
+    await page.click('[data-filter="active"]');
+    await page.click("#select-mode");
+    await page.click("#select-visible");
+
+    // 未完了だけを表示しているので、選ばれるものは無い
+    await expect(page.locator("#selection-count")).toHaveText("0 件を選択中");
+  });
+
+  test("選択モードでは文字を押しても完了状態が変わらない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う"]);
+    await completeTask(page, 0);
+
+    await page.click("#select-mode");
+    await page.locator(".task-item").first().locator(".task-text").click();
+
+    await expect(page.locator(".task-item").first()).toHaveClass(/completed/);
+    await expect(page.locator("#selection-count")).toHaveText("1 件を選択中");
+  });
+
+  test("選択モードをやめると選択は残らない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う"]);
+    await completeTask(page, 0);
+
+    await page.click("#select-mode");
+    await page.locator(".task-item").first().locator(".task-select").check();
+    await expect(page.locator("#selection-count")).toHaveText("1 件を選択中");
+
+    await page.click("#select-mode");
+    await expect(page.locator("#selection-bar")).toBeHidden();
+
+    await page.click("#select-mode");
+    await expect(page.locator("#selection-count")).toHaveText("0 件を選択中");
+  });
+
+  test("合言葉が違うとまとめて削除されない", async ({ page }) => {
+    await registerAdmin(page);
+    await addTasks(page, ["牛乳を買う"]);
+    await completeTask(page, 0);
+
+    await page.click("#select-mode");
+    await page.locator(".task-item").first().locator(".task-select").check();
+    await page.click("#delete-selected");
+    await confirmDelete(page, "wrong-password");
+
+    await expect(page.locator("#delete-error")).toHaveText("削除用パスワードが違います");
+    await expect(page.locator(".task-item")).toHaveCount(1);
+  });
+
+  test("管理者でないユーザーには選択の導線が出ず、API も拒否される", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["牛乳を買う"]);
+    await completeTask(page, 0);
+
+    await expect(page.locator("#select-mode")).toBeHidden();
+
+    const id = await page.locator(".task-item").first().getAttribute("data-id");
+    const res = await page.request.post("/api/tasks/bulk-delete", {
+      headers: API_HEADERS,
+      data: { ids: [id], password: DELETE_PASSWORD },
+    });
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("not_admin");
+  });
+
+  test("未完了が混ざっていると1件も消えない", async ({ request }) => {
+    await registerVerifiedViaApi(request, uniqueAdminEmail());
+    const ids = [];
+    for (const text of ["終わった", "まだ終わっていない"]) {
+      const created = await request.post("/api/tasks", { headers: API_HEADERS, data: { text } });
+      ids.push((await created.json()).task.id);
+    }
+    await request.patch(`/api/tasks/${ids[0]}`, { headers: API_HEADERS, data: { completed: true } });
+
+    const res = await request.post("/api/tasks/bulk-delete", {
+      headers: API_HEADERS,
+      data: { ids, password: DELETE_PASSWORD },
+    });
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("task_not_completed");
+
+    // 完了していたほうも残っている（一部だけ消えない）
+    const list = await (await request.get("/api/tasks", { headers: API_HEADERS })).json();
+    expect(list.tasks).toHaveLength(2);
+  });
+
+  test("合言葉なしのまとめて削除は拒否される", async ({ request }) => {
+    await registerVerifiedViaApi(request, uniqueAdminEmail());
+    const created = await request.post("/api/tasks", { headers: API_HEADERS, data: { text: "終わった" } });
+    const { task } = await created.json();
+    await request.patch(`/api/tasks/${task.id}`, { headers: API_HEADERS, data: { completed: true } });
+
+    const res = await request.post("/api/tasks/bulk-delete", { headers: API_HEADERS, data: { ids: [task.id] } });
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("bad_delete_password");
+  });
+
+  test("既に消えている id が混ざっていても成功する", async ({ request }) => {
+    await registerVerifiedViaApi(request, uniqueAdminEmail());
+    const created = await request.post("/api/tasks", { headers: API_HEADERS, data: { text: "終わった" } });
+    const { task } = await created.json();
+    await request.patch(`/api/tasks/${task.id}`, { headers: API_HEADERS, data: { completed: true } });
+
+    const res = await request.post("/api/tasks/bulk-delete", {
+      headers: API_HEADERS,
+      data: { ids: [task.id, "存在しない-id", task.id], password: DELETE_PASSWORD },
+    });
+    expect(res.status()).toBe(200);
+    // 同じ id を2回渡しても1件として数える
+    expect((await res.json()).deleted).toBe(1);
+  });
+
+  test("id が空の配列は受け付けない", async ({ request }) => {
+    await registerVerifiedViaApi(request, uniqueAdminEmail());
+
+    const res = await request.post("/api/tasks/bulk-delete", {
+      headers: API_HEADERS,
+      data: { ids: [], password: DELETE_PASSWORD },
+    });
+    expect(res.status()).toBe(400);
+  });
+
+  test("他人のタスクはまとめて削除できない", async ({ request, browser, baseURL }) => {
+    // 別のブラウザコンテキストで作ったタスクは、こちらからは見えない＝消せない
+    const other = await browser.newContext({ baseURL });
+    const otherRequest = other.request;
+    await registerVerifiedViaApi(otherRequest, uniqueAdminEmail());
+    const created = await otherRequest.post("/api/tasks", { headers: API_HEADERS, data: { text: "他人のタスク" } });
+    const { task } = await created.json();
+    await otherRequest.patch(`/api/tasks/${task.id}`, { headers: API_HEADERS, data: { completed: true } });
+
+    await registerVerifiedViaApi(request, uniqueAdminEmail());
+    const res = await request.post("/api/tasks/bulk-delete", {
+      headers: API_HEADERS,
+      data: { ids: [task.id], password: DELETE_PASSWORD },
+    });
+    // 見えないので「消す相手が無かった」扱いになり、相手のタスクは残る
+    expect(res.status()).toBe(200);
+    expect((await res.json()).deleted).toBe(0);
+
+    const list = await (await otherRequest.get("/api/tasks", { headers: API_HEADERS })).json();
+    expect(list.tasks).toHaveLength(1);
+    await other.close();
+  });
+});
+
 test.describe("データベースへの保存", () => {
   test("リロードしてもタスクと完了状態が保持される", async ({ page }) => {
     await register(page);

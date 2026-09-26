@@ -58,6 +58,19 @@
   const emptyState = $("empty-state");
   const countLabel = $("task-count");
   const clearCompletedBtn = $("clear-completed");
+  const selectModeBtn = $("select-mode");
+  const selectionBar = $("selection-bar");
+  const selectionCount = $("selection-count");
+  const selectVisibleBtn = $("select-visible");
+  const selectionClearBtn = $("selection-clear");
+  const deleteSelectedBtn = $("delete-selected");
+  const editDialog = $("edit-dialog");
+  const editForm = $("edit-form");
+  const editText = $("edit-text");
+  const editDue = $("edit-due");
+  const editError = $("edit-error");
+  const editSave = $("edit-save");
+  const editCancel = $("edit-cancel");
   const exportBtn = $("export-tasks");
   const importBtn = $("import-tasks");
   const exportDialog = $("export-dialog");
@@ -91,6 +104,12 @@
   let isAdmin = false;
   /** 削除ダイアログで「はい」が押されたときに実行する処理 */
   let pendingDelete = null;
+  /** まとめて削除するための選択モード（削除できる管理者だけが使える） */
+  let selectMode = false;
+  /** 選択中のタスクの id。未完了に戻された・消えたものは render が取り除く */
+  const selectedIds = new Set();
+  /** 編集ダイアログで開いているタスクの id */
+  let editingId = null;
   /** メールのリンクから受け取ったパスワード再設定用トークン */
   let resetToken = null;
 
@@ -150,6 +169,8 @@
     signedIn = false;
     isAdmin = false;
     closeDeleteDialog();
+    closeEditDialog();
+    setSelectMode(false);
     tasks = [];
     list.innerHTML = "";
     showMessage(authError, "");
@@ -168,6 +189,9 @@
     isAdmin = user.isAdmin === true;
     // 管理者以外には削除の導線そのものを見せない（サーバー側でも弾いている）
     clearCompletedBtn.hidden = !isAdmin;
+    // まとめて削除も削除なので、管理者以外には導線を出さない
+    selectModeBtn.hidden = !isAdmin;
+    setSelectMode(false);
     deleteHint.hidden = !isAdmin;
     userEmail.textContent = user.email;
     // ログインが無い版では、アカウント関係の導線を出さない
@@ -441,6 +465,112 @@
     afterChange();
   }
 
+  // ---- 編集 ----
+
+  function openEdit(task) {
+    editingId = task.id;
+    editText.value = task.text;
+    editDue.value = task.dueDate || "";
+    showMessage(editError, "");
+    editDialog.showModal();
+  }
+
+  function closeEditDialog() {
+    editingId = null;
+    if (editDialog.open) editDialog.close();
+  }
+
+  async function saveEdit(id, text, dueDate) {
+    try {
+      const data = await api("PATCH", `/api/tasks/${encodeURIComponent(id)}`, {
+        text,
+        dueDate: dueDate || null,
+      });
+      tasks = tasks.map((t) => (t.id === id ? data.task : t));
+      afterChange();
+    } catch (err) {
+      // 別の端末で削除済みなら、書き戻す先が無いので一覧を取り直す
+      if (err.status === 404) {
+        await refreshTasks();
+        throw new Error("このタスクは見つかりません。一覧を最新にしました");
+      }
+      throw err;
+    }
+  }
+
+  editForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const id = editingId;
+    if (!id) return closeEditDialog();
+    submitForm(editSave, editError, async () => {
+      await saveEdit(id, editText.value.trim(), editDue.value);
+      closeEditDialog();
+    });
+  });
+
+  editCancel.addEventListener("click", closeEditDialog);
+  editDialog.addEventListener("close", () => {
+    editingId = null;
+  });
+
+  // ---- まとめて削除 ----
+
+  /** 選択モードを切り替える。切り替えるたびに選択は空にする（消す相手を持ち越さない） */
+  function setSelectMode(on) {
+    selectMode = on && isAdmin;
+    selectedIds.clear();
+    selectModeBtn.textContent = selectMode ? "選択をやめる" : "選択";
+    selectModeBtn.classList.toggle("active", selectMode);
+    render();
+  }
+
+  function toggleSelected(id) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+    render();
+  }
+
+  function updateSelectionBar() {
+    selectionBar.hidden = !selectMode;
+    const count = selectedIds.size;
+    selectionCount.textContent = `${count} 件を選択中`;
+    deleteSelectedBtn.disabled = count === 0;
+    deleteSelectedBtn.textContent = count === 0 ? "選択したぶんを削除" : `選択した ${count} 件を削除`;
+  }
+
+  async function deleteSelected(ids, password) {
+    const data = await api("POST", "/api/tasks/bulk-delete", { ids, password });
+    tasks = data.tasks;
+    // 消し終わったら選ぶものが無いので、選択モードからも抜ける（render もここで走る）
+    setSelectMode(false);
+    notifyOtherTabs("tasks");
+  }
+
+  selectModeBtn.addEventListener("click", () => {
+    showMessage(taskError, "");
+    setSelectMode(!selectMode);
+  });
+
+  // 「すべて」ではなく表示中のぶんだけ選ぶ。絞り込み中に見えていないものまで消えると分からない
+  selectVisibleBtn.addEventListener("click", () => {
+    for (const task of getFilteredTasks()) {
+      if (task.completed) selectedIds.add(task.id);
+    }
+    render();
+  });
+
+  selectionClearBtn.addEventListener("click", () => {
+    selectedIds.clear();
+    render();
+  });
+
+  deleteSelectedBtn.addEventListener("click", () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    showMessage(taskError, "");
+    confirmDelete(`選択した ${ids.length} 件を削除します。`, (password) => deleteSelected(ids, password));
+  });
+
   // ---- 削除の確認ダイアログ ----
 
   /**
@@ -616,6 +746,14 @@
   }
 
   function render() {
+    // 消された・未完了に戻されたタスクは選択から外す（消せない相手を数えないため）
+    if (selectedIds.size > 0) {
+      const deletable = new Set(tasks.filter((t) => t.completed).map((t) => t.id));
+      for (const id of [...selectedIds]) {
+        if (!deletable.has(id)) selectedIds.delete(id);
+      }
+    }
+
     const filtered = getFilteredTasks();
     list.innerHTML = "";
 
@@ -634,7 +772,11 @@
       const span = document.createElement("span");
       span.className = "task-text";
       span.textContent = task.text;
-      span.addEventListener("click", () => run(() => toggleTask(task.id)));
+      span.addEventListener("click", () => {
+        // 選択モードのあいだは、うっかり完了状態を変えないよう選択の切り替えにする
+        if (!selectMode) return run(() => toggleTask(task.id));
+        if (task.completed) toggleSelected(task.id);
+      });
 
       li.appendChild(checkbox);
       li.appendChild(span);
@@ -653,23 +795,50 @@
         li.appendChild(due);
       }
 
-      // 削除は「管理者」かつ「完了済み」のときだけ。未完了のあいだはボタンを押せなくして
-      // 理由を出す（消えていると、なぜ消せないのか分からないため）
-      if (isAdmin) {
-        const deleteBtn = document.createElement("button");
-        deleteBtn.type = "button";
-        deleteBtn.className = "task-delete";
-        deleteBtn.textContent = "✕";
-        deleteBtn.setAttribute("aria-label", "削除");
-        if (!task.completed) {
-          deleteBtn.disabled = true;
-          deleteBtn.title = "完了していないタスクは削除できません";
+      if (selectMode) {
+        // 選択できるのは完了済みだけ。未完了は押せないチェックを置いて理由を出す
+        const select = document.createElement("input");
+        select.type = "checkbox";
+        select.className = "task-select";
+        select.checked = selectedIds.has(task.id);
+        select.setAttribute("aria-label", "削除するタスクに選ぶ");
+        if (task.completed) {
+          select.addEventListener("change", () => toggleSelected(task.id));
         } else {
-          deleteBtn.addEventListener("click", () =>
-            confirmDelete(`「${task.text}」を削除します。`, (password) => deleteTask(task.id, password))
-          );
+          select.disabled = true;
+          select.title = "完了していないタスクは削除できません";
         }
-        li.appendChild(deleteBtn);
+        if (selectedIds.has(task.id)) li.classList.add("selected");
+        li.appendChild(select);
+      } else {
+        // 編集は書き戻せる操作なので、削除と違って管理者でなくても使える
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "task-edit";
+        // 記号（✎）は環境によってクリップのような字形になるので、文字で書く
+        editBtn.textContent = "編集";
+        editBtn.title = "内容と期日を変える";
+        editBtn.addEventListener("click", () => openEdit(task));
+        li.appendChild(editBtn);
+
+        // 削除は「管理者」かつ「完了済み」のときだけ。未完了のあいだはボタンを押せなくして
+        // 理由を出す（消えていると、なぜ消せないのか分からないため）
+        if (isAdmin) {
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "task-delete";
+          deleteBtn.textContent = "✕";
+          deleteBtn.setAttribute("aria-label", "削除");
+          if (!task.completed) {
+            deleteBtn.disabled = true;
+            deleteBtn.title = "完了していないタスクは削除できません";
+          } else {
+            deleteBtn.addEventListener("click", () =>
+              confirmDelete(`「${task.text}」を削除します。`, (password) => deleteTask(task.id, password))
+            );
+          }
+          li.appendChild(deleteBtn);
+        }
       }
 
       list.appendChild(li);
@@ -679,6 +848,7 @@
 
     const activeCount = tasks.filter((t) => !t.completed).length;
     countLabel.textContent = `${tasks.length} 件のタスク（未完了 ${activeCount} 件）`;
+    updateSelectionBar();
   }
 
   form.addEventListener("submit", (e) => {
