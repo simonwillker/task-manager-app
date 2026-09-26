@@ -191,6 +191,101 @@ test.describe("GitHub Pages 用の静的版", () => {
   });
 });
 
+test.describe("静的版の編集・まとめて削除", () => {
+  test("内容と期日を書き換えて localStorage に残る", async ({ page }) => {
+    await open(page);
+    await addTask(page, "牛乳を買う");
+
+    await page.locator(".task-item").first().locator(".task-edit").click();
+    await expect(page.locator("#edit-text")).toHaveValue("牛乳を買う");
+    await page.fill("#edit-text", "低脂肪乳を買う");
+    await page.fill("#edit-due", "2030-01-15");
+    await page.click("#edit-save");
+
+    await expect(page.locator(".task-text").first()).toHaveText("低脂肪乳を買う");
+
+    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || "[]"), STORAGE_KEY);
+    expect(stored[0]).toMatchObject({ text: "低脂肪乳を買う", dueDate: "2030-01-15" });
+
+    // 開き直しても残る（画面だけの書き換えではない）
+    await page.reload();
+    await expect(page.locator(".task-text").first()).toHaveText("低脂肪乳を買う");
+  });
+
+  test("編集では合言葉を聞かれない", async ({ page }) => {
+    await open(page);
+    await addTask(page, "牛乳を買う");
+
+    await page.locator(".task-item").first().locator(".task-edit").click();
+    await page.fill("#edit-text", "書き換えた");
+    await page.click("#edit-save");
+
+    await expect(page.locator("#delete-dialog")).toBeHidden();
+    await expect(page.locator(".task-text").first()).toHaveText("書き換えた");
+  });
+
+  test("選んだ完了済みだけをまとめて削除できる", async ({ page }) => {
+    await open(page);
+    await addTask(page, "牛乳を買う");
+    await addTask(page, "レポートを書く");
+    for (const text of ["牛乳を買う", "レポートを書く"]) {
+      await page.locator(".task-item", { hasText: text }).locator(".task-checkbox").check();
+    }
+
+    await page.click("#select-mode");
+    await page.locator(".task-item", { hasText: "牛乳を買う" }).locator(".task-select").check();
+    await expect(page.locator("#selection-count")).toHaveText("1 件を選択中");
+
+    await page.click("#delete-selected");
+    await page.fill("#delete-password", DELETE_PASSWORD);
+    await page.click("#delete-confirm");
+
+    await expect(page.locator(".task-item")).toHaveCount(1);
+    await expect(page.locator(".task-text").first()).toHaveText("レポートを書く");
+
+    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || "[]"), STORAGE_KEY);
+    expect(stored).toHaveLength(1);
+  });
+
+  test("まとめて削除にも合言葉が要る", async ({ page }) => {
+    await open(page);
+    await addTask(page, "牛乳を買う");
+    await page.locator(".task-item").first().locator(".task-checkbox").check();
+
+    await page.click("#select-mode");
+    await page.locator(".task-item").first().locator(".task-select").check();
+    await page.click("#delete-selected");
+    await page.fill("#delete-password", "wrong-password");
+    await page.click("#delete-confirm");
+
+    await expect(page.locator("#delete-error")).toHaveText("削除用パスワードが違います");
+    await expect(page.locator(".task-item")).toHaveCount(1);
+  });
+
+  test("未完了が混ざっていると、画面を通さなくても1件も消えない", async ({ page }) => {
+    await open(page, [
+      { id: "a", text: "終わった", completed: true, createdAt: 2 },
+      { id: "b", text: "まだ終わっていない", completed: false, createdAt: 1 },
+    ]);
+
+    const result = await page.evaluate(
+      ([password]) =>
+        window.TaskAppLocalBackend.request("POST", "/api/tasks/bulk-delete", {
+          ids: ["a", "b"],
+          password,
+        }).then(
+          () => ({ ok: true }),
+          (err) => ({ ok: false, status: err.status, code: err.code })
+        ),
+      [DELETE_PASSWORD]
+    );
+    expect(result).toMatchObject({ ok: false, status: 409, code: "task_not_completed" });
+
+    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || "[]"), STORAGE_KEY);
+    expect(stored).toHaveLength(2);
+  });
+});
+
 test.describe("静的版の書き出し・読み込み", () => {
   test("書き出した本文に今のタスクが入っている", async ({ page }) => {
     await open(page);

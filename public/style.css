@@ -489,3 +489,122 @@ body {
 .delete-actions {
   flex-wrap: wrap;
 }
+
+/* ---- タスクの編集 ---- */
+
+.task-edit {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.task-edit:hover {
+  color: var(--primary);
+  background: rgba(79, 70, 229, 0.1);
+}
+
+/* ---- まとめて削除 ---- */
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* 選択モードに入っていることが分かるようにする */
+#select-mode.active {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: #fdecea;
+  color: #b3261e;
+}
+
+/* display: flex は [hidden] より強い。選択モードでないときは必ず隠す */
+.selection-bar[hidden] {
+  display: none;
+}
+
+.selection-count {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-select {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--danger);
+  cursor: pointer;
+}
+
+/* 未完了は削除できないので、選ぶこともできない */
+.task-select:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.task-item.selected {
+  border-color: var(--danger);
+}
+
+/* .btn と組み合わせて使う。形は .btn のまま、色だけ危険側に変える */
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-hover);
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-color-scheme: dark) {
+  .selection-bar {
+    background: rgba(239, 68, 68, 0.14);
+    color: #fca5a5;
+  }
+}
+
+/* 狭い画面では「編集」のぶん行が窮屈になるので、余白を詰める */
+@media (max-width: 480px) {
+  .task-item {
+    gap: 6px;
+  }
+
+  .task-edit {
+    font-size: 0.72rem;
+    padding: 6px 4px;
+  }
+}

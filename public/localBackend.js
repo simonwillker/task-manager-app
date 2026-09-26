@@ -17,6 +17,8 @@
   const MAX_TASK_LENGTH = 200;
   // サーバー版の MAX_IMPORT_TASKS と同じ
   const MAX_IMPORT_TASKS = 1000;
+  // サーバー版の MAX_BULK_DELETE_IDS と同じ
+  const MAX_BULK_DELETE_IDS = 1000;
 
   // サーバー版の DELETE_PASSWORD にあたるもの。
   // 静的配信では値を隠せない（このファイルを読めば分かる）。
@@ -105,6 +107,18 @@
     return value;
   }
 
+  /** まとめて削除する id 一覧。server/app.js の parseTaskIds と同じ条件 */
+  function parseTaskIds(value) {
+    if (!Array.isArray(value) || value.length === 0) fail(400, "リクエストの形式が正しくありません");
+    if (value.length > MAX_BULK_DELETE_IDS) {
+      fail(400, `一度に削除できるのは ${MAX_BULK_DELETE_IDS} 件までです`);
+    }
+    for (const id of value) {
+      if (typeof id !== "string" || !id) fail(400, "リクエストの形式が正しくありません");
+    }
+    return [...new Set(value)];
+  }
+
   // ---- 削除の可否 ----
 
   function readDeleteState() {
@@ -191,6 +205,22 @@
       return { tasks: sorted(tasks) };
     }
 
+    if (path === "/api/tasks/bulk-delete" && method === "POST") {
+      // サーバー版の deleteSelectedTasks と同じ。未完了が混ざっていたら何も消さない
+      authorizeDelete(body);
+      const ids = parseTaskIds(body?.ids);
+      const target = new Set(ids);
+      const tasks = readTasks();
+      for (const task of tasks) {
+        if (target.has(task.id) && !task.completed) {
+          fail(409, "完了していないタスクは削除できません", "task_not_completed");
+        }
+      }
+      const remaining = tasks.filter((t) => !target.has(t.id));
+      writeTasks(remaining);
+      return { tasks: sorted(remaining), deleted: tasks.length - remaining.length };
+    }
+
     if (path === "/api/tasks/clear-completed" && method === "POST") {
       authorizeDelete(body);
       const remaining = readTasks().filter((t) => !t.completed);
@@ -219,11 +249,13 @@
       const index = tasks.findIndex((t) => t.id === id);
 
       if (method === "PATCH") {
+        const hasText = body && Object.prototype.hasOwnProperty.call(body, "text");
         const hasCompleted = body && Object.prototype.hasOwnProperty.call(body, "completed");
         const hasDueDate = body && Object.prototype.hasOwnProperty.call(body, "dueDate");
-        if (!hasCompleted && !hasDueDate) fail(400, "変更する内容がありません");
+        if (!hasText && !hasCompleted && !hasDueDate) fail(400, "変更する内容がありません");
         if (index === -1) fail(404, "タスクが見つかりません");
 
+        if (hasText) tasks[index].text = parseTaskText(body.text);
         if (hasCompleted) {
           if (typeof body.completed !== "boolean") fail(400, "completed には true か false を指定してください");
           tasks[index].completed = body.completed;

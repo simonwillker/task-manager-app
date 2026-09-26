@@ -15,6 +15,7 @@ const RESET_PASSWORD_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 時間
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_TASK_LENGTH = 200;
 const MAX_IMPORT_TASKS = 1000;
+const MAX_BULK_DELETE_IDS = 1000;
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 128;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -194,6 +195,21 @@ function parseDueDate(value) {
   return value;
 }
 
+/**
+ * まとめて削除するタスクの id 一覧を受け取る。
+ * 同じ id が2回来ても1回として扱う（画面の選択が重複しても結果を変えない）。
+ */
+function parseTaskIds(value) {
+  if (!Array.isArray(value) || value.length === 0) throw invalidRequest();
+  if (value.length > MAX_BULK_DELETE_IDS) {
+    throw new HttpError(400, `一度に削除できるのは ${MAX_BULK_DELETE_IDS} 件までです`);
+  }
+  for (const id of value) {
+    if (typeof id !== "string" || !id) throw invalidRequest();
+  }
+  return [...new Set(value)];
+}
+
 function toTask(row) {
   return {
     id: row.id,
@@ -301,6 +317,7 @@ function createApp({
     insertTask: db.prepare(
       "INSERT INTO tasks (id, user_id, text, completed, created_at, due_date) VALUES (?, ?, ?, ?, ?, ?)"
     ),
+    updateTaskText: db.prepare("UPDATE tasks SET text = ? WHERE id = ? AND user_id = ?"),
     updateTaskCompleted: db.prepare("UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?"),
     updateTaskDueDate: db.prepare("UPDATE tasks SET due_date = ? WHERE id = ? AND user_id = ?"),
     deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ? AND completed = 1"),
@@ -623,15 +640,23 @@ function createApp({
     return stmts.listTasks.all(userId).map(toTask);
   }
 
+  /**
+   * タスクの内容・完了状態・期日を変える。
+   * 書き換えは取り消せる操作なので、削除と違って管理者でなくてもよい（自分のタスクだけ）。
+   */
   async function updateTask(req, res, user, id) {
     const body = await readJson(req);
+    const hasText = Object.prototype.hasOwnProperty.call(body, "text");
     const hasCompleted = body.completed !== undefined;
     const hasDueDate = Object.prototype.hasOwnProperty.call(body, "dueDate");
-    // どちらも来ていない更新は、何をしたいのか決まらないので受け付けない
-    if (!hasCompleted && !hasDueDate) throw invalidRequest();
+    // どれも来ていない更新は、何をしたいのか決まらないので受け付けない
+    if (!hasText && !hasCompleted && !hasDueDate) throw invalidRequest();
     if (hasCompleted && typeof body.completed !== "boolean") throw invalidRequest();
 
     let changed = 0;
+    if (hasText) {
+      changed += stmts.updateTaskText.run(parseTaskText(body.text), id, user.id).changes;
+    }
     if (hasCompleted) {
       changed += stmts.updateTaskCompleted.run(body.completed ? 1 : 0, id, user.id).changes;
     }
@@ -679,6 +704,31 @@ function createApp({
     const { changes } = stmts.deleteTask.run(id, user.id);
     if (changes === 0) throw new HttpError(409, "完了していないタスクは削除できません", { code: "task_not_completed" });
     sendNoContent(res);
+  }
+
+  /**
+   * 選んだタスクをまとめて削除する。1件ずつの削除と同じ条件で判定する。
+   * 未完了が1つでも混ざっていたら、何も消さずに断る（一部だけ消えるほうが分かりにくい）。
+   */
+  async function deleteSelectedTasks(req, res, user) {
+    const body = await readJson(req);
+    authorizeDelete(req, user, body);
+    const ids = parseTaskIds(body.ids);
+
+    const deleted = transaction(() => {
+      let count = 0;
+      for (const id of ids) {
+        const task = stmts.findTask.get(id, user.id);
+        // 別の端末で既に消えていたものは飛ばす（結果は同じなので失敗にしない）
+        if (!task) continue;
+        if (!task.completed) {
+          throw new HttpError(409, "完了していないタスクは削除できません", { code: "task_not_completed" });
+        }
+        count += stmts.deleteTask.run(id, user.id).changes;
+      }
+      return count;
+    });
+    sendJson(res, 200, { tasks: listTasks(user.id), deleted });
   }
 
   async function clearCompleted(req, res, user) {
@@ -735,6 +785,7 @@ function createApp({
       if (method === "POST") return createTask(req, res, user);
     }
     if (pathname === "/api/tasks/import" && method === "POST") return importTasks(req, res, user);
+    if (pathname === "/api/tasks/bulk-delete" && method === "POST") return deleteSelectedTasks(req, res, user);
     if (pathname === "/api/tasks/clear-completed" && method === "POST") return clearCompleted(req, res, user);
 
     const match = pathname.match(/^\/api\/tasks\/([^/]+)$/);

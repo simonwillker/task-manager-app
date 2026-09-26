@@ -120,7 +120,20 @@
           <button class="filter-btn" data-filter="active">未完了</button>
           <button class="filter-btn" data-filter="completed">完了済み</button>
         </div>
-        <button id="clear-completed" class="btn btn-ghost" hidden>完了済みを削除</button>
+        <div class="toolbar-actions">
+          <button type="button" id="select-mode" class="btn btn-ghost" hidden>選択</button>
+          <button id="clear-completed" class="btn btn-ghost" hidden>完了済みを削除</button>
+        </div>
+      </div>
+
+      <!-- まとめて削除。選択モードのあいだだけ出す -->
+      <div id="selection-bar" class="selection-bar" hidden>
+        <span id="selection-count" class="selection-count">0 件を選択中</span>
+        <div class="selection-actions">
+          <button type="button" id="select-visible" class="link-btn">表示中の完了済みを選ぶ</button>
+          <button type="button" id="selection-clear" class="link-btn">選択を解除</button>
+          <button type="button" id="delete-selected" class="btn btn-danger" disabled>選択したぶんを削除</button>
+        </div>
       </div>
 
       <ul id="task-list" class="task-list"></ul>
@@ -139,6 +152,33 @@
         <button type="button" id="import-tasks" class="link-btn">タスクを読み込む</button>
       </div>
     </section>
+
+    <!-- タスクの編集。内容と期日をまとめて直す -->
+    <dialog id="edit-dialog" class="delete-dialog">
+      <form id="edit-form" method="dialog">
+        <h2 class="delete-title">タスクを編集</h2>
+        <label class="field">
+          <span class="field-label">内容</span>
+          <input
+            type="text"
+            id="edit-text"
+            class="text-input"
+            autocomplete="off"
+            maxlength="200"
+            required
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">期日（空にすると期日なし）</span>
+          <input type="date" id="edit-due" class="text-input due-input" />
+        </label>
+        <p id="edit-error" class="form-error" role="alert" hidden></p>
+        <div class="delete-actions">
+          <button type="button" id="edit-cancel" class="btn btn-ghost">やめる</button>
+          <button type="submit" id="edit-save" class="btn btn-primary">保存する</button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- 削除の確認（合言葉） -->
     <!-- 書き出し。端末間で持ち運べるよう、ファイル保存と本文コピーの両方を用意する -->
