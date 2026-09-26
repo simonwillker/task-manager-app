@@ -286,6 +286,36 @@ test.describe("静的版の編集・まとめて削除", () => {
   });
 });
 
+test.describe("静的版のレイアウト", () => {
+  // 以前は入力欄と「期日＋追加」が横並びで、狭い画面では入力欄が数文字ぶんまで潰れていた
+  for (const width of [390, 480, 820]) {
+    test(`幅 ${width}px でタスク入力欄が1行を使い切る`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page);
+
+      const input = await page.locator("#task-input").boundingBox();
+      const form = await page.locator(".task-form").boundingBox();
+      const row = await page.locator(".task-form-row").boundingBox();
+
+      // 入力欄はフォームの幅いっぱい
+      expect(input.width).toBeGreaterThan(form.width - 2);
+      // 期日と追加は次の行に来る
+      expect(row.y).toBeGreaterThanOrEqual(input.y + input.height - 1);
+      // 日付欄も読める幅が残っている
+      expect((await page.locator("#task-due").boundingBox()).width).toBeGreaterThan(120);
+    });
+  }
+
+  test("狭い画面でも横スクロールが発生しない", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page);
+    await addTask(page, "とても長いタスク名のテストでレイアウトが崩れないことを確認する", "2030-01-15");
+
+    const overflows = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+    expect(overflows).toBe(false);
+  });
+});
+
 test.describe("静的版の書き出し・読み込み", () => {
   test("書き出した本文に今のタスクが入っている", async ({ page }) => {
     await open(page);
