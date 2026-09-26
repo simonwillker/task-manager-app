@@ -66,11 +66,27 @@ body {
   font-size: 0.9rem;
 }
 
+/*
+ * 入力欄を1行目、「期日＋追加」を2行目に置く。
+ *
+ * 以前は横並びだった。.text-input は flex: 1 / min-width: 0 なので入力欄だけが
+ * 0 まで縮み、幅 390px の端末では「新し」しか見えなかった。
+ * flex-wrap で折り返す手も試したが、折り返すかどうかが日付入力欄の実幅で決まり、
+ * 同じ 820px でも端末の解像度やブラウザ（iOS Safari は日付欄の見た目が違う）で
+ * 変わってしまう。どの画面でも同じ見た目になるよう、初めから縦に並べる。
+ */
 .task-form {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 16px;
 }
+
+/* 縦並びの中では伸ばさない（flex: 1 のままだと高さ方向の指定になる） */
+#task-input {
+  flex: 0 0 auto;
+}
+
 
 .text-input {
   flex: 1;
@@ -405,7 +421,6 @@ body {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  margin-top: 8px;
 }
 
 .due-field {
