@@ -1296,3 +1296,42 @@ test.describe("書き出し・読み込み（サーバー版）", () => {
     await expect(page.locator("#import-error")).toContainText("形式が正しくありません");
   });
 });
+
+test.describe("期日での絞り込みと並べ替え（サーバー版）", () => {
+  /** きょうから n 日後の YYYY-MM-DD */
+  function dayKey(offset) {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  test("期限切れで絞りこみ、期日順に並べ替えられる", async ({ page }) => {
+    await register(page);
+    await addTaskWithDue(page, "来週のもの", dayKey(7));
+    await addTaskWithDue(page, "過ぎたもの", dayKey(-1));
+    await addTaskWithDue(page, "きょうのもの", dayKey(0));
+
+    await page.selectOption("#due-filter", "overdue");
+    expect(await page.locator(".task-text").allInnerTexts()).toEqual(["過ぎたもの"]);
+    await expect(page.locator("#task-count")).toContainText("期限切れ 1 件");
+
+    await page.selectOption("#due-filter", "all");
+    await page.selectOption("#sort-order", "due");
+    expect(await page.locator(".task-text").allInnerTexts()).toEqual(["過ぎたもの", "きょうのもの", "来週のもの"]);
+  });
+
+  test("絞りこみは端末に残り、ログインし直しても効いたままになる", async ({ page }) => {
+    const { email, password } = await register(page);
+    await addTaskWithDue(page, "期日つき", dayKey(3));
+    await addTasks(page, ["期日なし"]);
+
+    await page.selectOption("#due-filter", "none");
+    expect(await page.locator(".task-text").allInnerTexts()).toEqual(["期日なし"]);
+
+    await page.click("#task-view [data-logout]");
+    await login(page, email, password);
+    await expect(page.locator("#due-filter")).toHaveValue("none");
+    expect(await page.locator(".task-text").allInnerTexts()).toEqual(["期日なし"]);
+  });
+});

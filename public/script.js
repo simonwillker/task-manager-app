@@ -94,10 +94,16 @@
   const deleteConfirm = $("delete-confirm");
   const deleteCancel = $("delete-cancel");
   const filterButtons = document.querySelectorAll("[data-filter]");
+  const dueFilterSelect = $("due-filter");
+  const sortOrderSelect = $("sort-order");
+  const viewResetBtn = $("view-reset");
 
   /** @type {{id: string, text: string, completed: boolean, createdAt: number}[]} */
   let tasks = [];
   let currentFilter = "all";
+  /** 期日での絞り込み（all / overdue / today / week / none）とその中の並び順（created / due） */
+  let currentDue = "all";
+  let currentSort = "created";
   let authMode = "login";
   let signedIn = false;
   /** 管理者だけがタスクを削除できる。実際の可否はサーバーが毎回判定する */
@@ -739,10 +745,70 @@
     return `${Number(m)}/${Number(d)} まで`;
   }
 
+  /** 表示条件はこの端末に覚えておく。サーバーには送らない（見え方だけの話なので） */
+  const VIEW_KEY = "taskManagerApp.view";
+
+  function loadViewState() {
+    try {
+      const raw = localStorage.getItem(VIEW_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (DUE_FILTERS[saved.due]) currentDue = saved.due;
+      if (saved.sort === "created" || saved.sort === "due") currentSort = saved.sort;
+    } catch {
+      // 壊れていたら既定のまま使う
+    }
+  }
+
+  function saveViewState() {
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify({ due: currentDue, sort: currentSort }));
+    } catch {
+      // 保存できなくても表示は動く
+    }
+  }
+
+  /** きょうから n 日後の YYYY-MM-DD */
+  function dayKey(offset) {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  /**
+   * 期日での絞り込み。「期限切れ」だけは完了済みを外す
+   * （終わったタスクを期限切れとして数えても意味がないため）。
+   */
+  const DUE_FILTERS = {
+    all: () => true,
+    overdue: (t) => !!t.dueDate && !t.completed && t.dueDate < todayKey(),
+    today: (t) => !!t.dueDate && t.dueDate <= todayKey(),
+    week: (t) => !!t.dueDate && t.dueDate <= dayKey(6),
+    none: (t) => !t.dueDate,
+  };
+
+  /** 期日順は「近いものが上、期日なしは最後」。同じ日なら追加順のまま */
+  function byDueDate(a, b) {
+    if (a.dueDate === b.dueDate) return 0;
+    if (!a.dueDate) return 1;
+    if (!b.dueDate) return -1;
+    return a.dueDate < b.dueDate ? -1 : 1;
+  }
+
   function getFilteredTasks() {
-    if (currentFilter === "active") return tasks.filter((t) => !t.completed);
-    if (currentFilter === "completed") return tasks.filter((t) => t.completed);
-    return tasks;
+    let list = tasks;
+    if (currentFilter === "active") list = list.filter((t) => !t.completed);
+    else if (currentFilter === "completed") list = list.filter((t) => t.completed);
+    const dueMatch = DUE_FILTERS[currentDue] || DUE_FILTERS.all;
+    if (currentDue !== "all") list = list.filter(dueMatch);
+    // 並べ替えるときだけ写す。元の配列（＝追加順）は崩さない
+    if (currentSort === "due") list = [...list].sort(byDueDate);
+    return list;
+  }
+
+  function overdueCount() {
+    return tasks.filter(DUE_FILTERS.overdue).length;
   }
 
   function render() {
@@ -845,9 +911,15 @@
     });
 
     emptyState.hidden = filtered.length !== 0;
+    // 絞り込みで消えているのか、そもそも無いのかが分かるようにする
+    const narrowed = currentFilter !== "all" || currentDue !== "all";
+    emptyState.textContent = narrowed && tasks.length > 0 ? "この条件に合うタスクはありません" : "タスクはまだありません";
 
     const activeCount = tasks.filter((t) => !t.completed).length;
-    countLabel.textContent = `${tasks.length} 件のタスク（未完了 ${activeCount} 件）`;
+    const overdue = overdueCount();
+    countLabel.textContent =
+      `${tasks.length} 件のタスク（未完了 ${activeCount} 件）` + (overdue > 0 ? ` · 期限切れ ${overdue} 件` : "");
+    viewResetBtn.hidden = !narrowed;
     updateSelectionBar();
   }
 
@@ -906,6 +978,31 @@
       render();
     });
   });
+
+  dueFilterSelect.addEventListener("change", () => {
+    currentDue = DUE_FILTERS[dueFilterSelect.value] ? dueFilterSelect.value : "all";
+    saveViewState();
+    render();
+  });
+
+  sortOrderSelect.addEventListener("change", () => {
+    currentSort = sortOrderSelect.value === "due" ? "due" : "created";
+    saveViewState();
+    render();
+  });
+
+  viewResetBtn.addEventListener("click", () => {
+    currentFilter = "all";
+    currentDue = "all";
+    filterButtons.forEach((b) => b.classList.toggle("active", b.dataset.filter === "all"));
+    dueFilterSelect.value = "all";
+    saveViewState();
+    render();
+  });
+
+  loadViewState();
+  dueFilterSelect.value = currentDue;
+  sortOrderSelect.value = currentSort;
 
   // ---- 他のタブ・端末との同期 ----
 

@@ -126,6 +126,28 @@
         </div>
       </div>
 
+      <!-- 期日での絞り込みと並べ替え。選んだ内容はこの端末に覚えておく -->
+      <div class="view-controls">
+        <label class="view-field">
+          <span class="view-label">期日</span>
+          <select id="due-filter" class="view-select">
+            <option value="all">すべて</option>
+            <option value="overdue">期限切れ</option>
+            <option value="today">きょうまで</option>
+            <option value="week">7日以内</option>
+            <option value="none">期日なし</option>
+          </select>
+        </label>
+        <label class="view-field">
+          <span class="view-label">並び</span>
+          <select id="sort-order" class="view-select">
+            <option value="created">追加順</option>
+            <option value="due">期日順</option>
+          </select>
+        </label>
+        <button type="button" id="view-reset" class="link-btn" hidden>条件を外す</button>
+      </div>
+
       <!-- まとめて削除。選択モードのあいだだけ出す -->
       <div id="selection-bar" class="selection-bar" hidden>
         <span id="selection-count" class="selection-count">0 件を選択中</span>

@@ -250,6 +250,43 @@ body {
   color: var(--danger);
 }
 
+/* display の指定は [hidden] より強く、.user-bar と .selection-bar で2回踏んだ。
+   新しく出し分けする要素でも同じ事故が起きないよう、ここで一度に止める */
+[hidden] {
+  display: none !important;
+}
+
+/* 期日での絞り込みと並べ替え。狭い画面では折り返す */
+.view-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.view-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.view-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.view-select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 0;
+}
+
 .toolbar {
   display: flex;
   align-items: center;

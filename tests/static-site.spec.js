@@ -389,4 +389,115 @@ test.describe("静的版の書き出し・読み込み", () => {
     await page.click("#import-confirm");
     await expect(page.locator(".task-text", { hasText: "古い形のタスク" })).toBeVisible();
   });
+  // ---- 期日での絞り込みと並べ替え（PR #7 で「要望があれば」と保留していたぶん） ----
+
+  /** きょうから n 日後の YYYY-MM-DD。テスト当日に合わせて毎回計算する */
+  function dayKey(offset) {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  /** 期日ちがいのタスクを一式そろえた状態で開く */
+  async function openWithDueDates(page) {
+    await open(page, [
+      { id: "s1", text: "過ぎたもの", completed: false, createdAt: 1758000000000, dueDate: dayKey(-3) },
+      { id: "s2", text: "過ぎたが完了", completed: true, createdAt: 1758000001000, dueDate: dayKey(-2) },
+      { id: "s3", text: "きょうのもの", completed: false, createdAt: 1758000002000, dueDate: dayKey(0) },
+      { id: "s4", text: "五日後のもの", completed: false, createdAt: 1758000003000, dueDate: dayKey(5) },
+      { id: "s5", text: "十日後のもの", completed: false, createdAt: 1758000004000, dueDate: dayKey(10) },
+      { id: "s6", text: "期日なしのもの", completed: false, createdAt: 1758000005000, dueDate: null },
+    ]);
+  }
+
+  const shownTexts = (page) => page.locator(".task-text").allInnerTexts();
+
+  test("期限切れで絞ると、未完了で期日を過ぎたものだけが出る", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.selectOption("#due-filter", "overdue");
+    expect(await shownTexts(page)).toEqual(["過ぎたもの"]);
+    // 終わったタスクを期限切れとして数えても意味がないので、完了済みは出さない
+    await expect(page.locator(".task-text", { hasText: "過ぎたが完了" })).toHaveCount(0);
+  });
+
+  test("きょうまでは期限切れもふくむ", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.selectOption("#due-filter", "today");
+    // 一覧は新しく足したものが上に来る（並べ替えを選ばないかぎりこの順のまま）
+    expect(await shownTexts(page)).toEqual(["きょうのもの", "過ぎたが完了", "過ぎたもの"]);
+  });
+
+  test("7日以内は6日後まで出て、それより先は出ない", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.selectOption("#due-filter", "week");
+    const texts = await shownTexts(page);
+    expect(texts).toContain("五日後のもの");
+    expect(texts).not.toContain("十日後のもの");
+    expect(texts).not.toContain("期日なしのもの");
+  });
+
+  test("期日なしだけを取り出せる", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.selectOption("#due-filter", "none");
+    expect(await shownTexts(page)).toEqual(["期日なしのもの"]);
+  });
+
+  test("期日順に並べると近い順になり、期日なしは最後に来る", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.selectOption("#sort-order", "due");
+    expect(await shownTexts(page)).toEqual([
+      "過ぎたもの",
+      "過ぎたが完了",
+      "きょうのもの",
+      "五日後のもの",
+      "十日後のもの",
+      "期日なしのもの",
+    ]);
+    // 追加順（新しいものが上）に戻せる
+    await page.selectOption("#sort-order", "created");
+    expect((await shownTexts(page))[0]).toBe("期日なしのもの");
+  });
+
+  test("状態の絞り込みと期日の絞り込みは重ねて効く", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.click('[data-filter="completed"]');
+    await page.selectOption("#due-filter", "today");
+    expect(await shownTexts(page)).toEqual(["過ぎたが完了"]);
+  });
+
+  test("条件に合うものが無いときは、そう書いてある", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.click('[data-filter="completed"]');
+    await page.selectOption("#due-filter", "none");
+    await expect(page.locator("#empty-state")).toHaveText("この条件に合うタスクはありません");
+  });
+
+  test("期限切れの件数がフッターに出る", async ({ page }) => {
+    await openWithDueDates(page);
+    await expect(page.locator("#task-count")).toContainText("期限切れ 1 件");
+  });
+
+  test("選んだ条件は読み込み直しても残り、「条件を外す」で戻せる", async ({ page }) => {
+    await openWithDueDates(page);
+    await page.selectOption("#due-filter", "week");
+    await page.selectOption("#sort-order", "due");
+    await page.reload();
+    await expect(page.locator("#task-view")).toBeVisible();
+    await expect(page.locator("#due-filter")).toHaveValue("week");
+    await expect(page.locator("#sort-order")).toHaveValue("due");
+
+    await page.click("#view-reset");
+    await expect(page.locator("#due-filter")).toHaveValue("all");
+    expect((await shownTexts(page)).length).toBe(6);
+    // 並び順は「条件」ではないので外さない
+    await expect(page.locator("#sort-order")).toHaveValue("due");
+  });
+
+  test("絞り込んでいないときは「条件を外す」を出さない", async ({ page }) => {
+    await openWithDueDates(page);
+    await expect(page.locator("#view-reset")).toBeHidden();
+    await page.selectOption("#due-filter", "overdue");
+    await expect(page.locator("#view-reset")).toBeVisible();
+  });
 });
