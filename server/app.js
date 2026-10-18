@@ -329,9 +329,9 @@ function createApp({
     listTaskSessions: db.prepare(
       "SELECT task_id, started_at, ended_at FROM task_sessions WHERE task_id = ? ORDER BY started_at, id"
     ),
-    openSession: db.prepare("SELECT id FROM task_sessions WHERE task_id = ? AND ended_at IS NULL"),
-    insertSession: db.prepare("INSERT INTO task_sessions (task_id, started_at) VALUES (?, ?)"),
-    closeSession: db.prepare("UPDATE task_sessions SET ended_at = ? WHERE task_id = ? AND ended_at IS NULL"),
+    openTaskSession: db.prepare("SELECT id FROM task_sessions WHERE task_id = ? AND ended_at IS NULL"),
+    insertTaskSession: db.prepare("INSERT INTO task_sessions (task_id, started_at) VALUES (?, ?)"),
+    closeTaskSession: db.prepare("UPDATE task_sessions SET ended_at = ? WHERE task_id = ? AND ended_at IS NULL"),
     deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ? AND completed = 1"),
     deleteCompletedTasks: db.prepare("DELETE FROM tasks WHERE user_id = ? AND completed = 1"),
   };
@@ -690,13 +690,13 @@ function createApp({
     }
     if (hasTimer) {
       if (!stmts.findTask.get(id, user.id)) throw new HttpError(404, "タスクが見つかりません");
-      const running = Boolean(stmts.openSession.get(id));
+      const running = Boolean(stmts.openTaskSession.get(id));
       if (body.timer === "start") {
         if (running) throw new HttpError(409, "すでに開始しています", { code: "already_started" });
-        stmts.insertSession.run(id, Date.now());
+        stmts.insertTaskSession.run(id, Date.now());
       } else {
         if (!running) throw new HttpError(409, "開始していません", { code: "not_started" });
-        stmts.closeSession.run(Date.now(), id);
+        stmts.closeTaskSession.run(Date.now(), id);
       }
       changed += 1;
     }
