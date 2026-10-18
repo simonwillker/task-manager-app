@@ -1358,6 +1358,24 @@ test.describe("開始・終了と学習履歴", () => {
     await expect(page.locator("#history-list")).toContainText("英語の勉強");
   });
 
+  test("終了するたびにコメントへ作業時間と合計が追記され、編集画面で見られる", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["英語の勉強"]);
+
+    const item = page.locator(".task-item", { hasText: "英語の勉強" });
+    for (let i = 0; i < 2; i++) {
+      await item.locator(".task-timer").click();
+      await expect(item.locator(".task-timer")).toHaveText("終了");
+      await item.locator(".task-timer").click();
+      await expect(item.locator(".task-timer")).toHaveText("開始");
+    }
+
+    await item.locator(".task-edit").click();
+    await expect(page.locator("#edit-comment")).toHaveValue(
+      /^1回目: \d{2}:\d{2}:\d{2}\n2回目: \d{2}:\d{2}:\d{2}\n合計: \d{2}:\d{2}:\d{2}$/
+    );
+  });
+
   test("API: 二重の開始・開始前の終了・不正な値は受け付けない", async ({ request }) => {
     await registerVerifiedViaApi(request);
     const created = await request.post("/api/tasks", { headers: API_HEADERS, data: { text: "記録用" } });

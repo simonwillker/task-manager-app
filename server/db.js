@@ -73,6 +73,10 @@ const MIGRATIONS = [
     CREATE INDEX idx_task_sessions_task ON task_sessions(task_id);
     CREATE UNIQUE INDEX idx_task_sessions_open ON task_sessions(task_id) WHERE ended_at IS NULL;
   `,
+  // 6: タスクのコメント。「終了」を押すたびに作業時間が1行ずつ追記される。編集画面で直せる。
+  `
+    ALTER TABLE tasks ADD COLUMN comment TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 /** SQLite データベースを開き、未適用のマイグレーションを実行する（":memory:" も指定可） */
