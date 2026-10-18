@@ -123,7 +123,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
-          claude_args: --max-turns 100 --allowedTools "Bash(npm *),Bash(npx *),Bash(node *)"
+          claude_args: --max-turns 100 --allowedTools "Bash(npm *),Bash(npx playwright *),Bash(node *)"
           prompt: |
             你是 Solomon 派来的执行方，负责完成 GitHub Issue #${{ github.event.issue.number }} 中的任务。
             - 先阅读 Issue 正文和全部评论，理解任务和已有进展。
