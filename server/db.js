@@ -61,6 +61,18 @@ const MIGRATIONS = [
   `
     ALTER TABLE tasks ADD COLUMN due_date TEXT;
   `,
+  // 5: タスクの作業記録。開始ボタンで行を足し、終了ボタンで ended_at を埋める。
+  //    ended_at が NULL の行が「いま進行中」。1つのタスクで同時に進行中にできるのは1行まで。
+  `
+    CREATE TABLE task_sessions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id    TEXT    NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      started_at INTEGER NOT NULL,
+      ended_at   INTEGER
+    );
+    CREATE INDEX idx_task_sessions_task ON task_sessions(task_id);
+    CREATE UNIQUE INDEX idx_task_sessions_open ON task_sessions(task_id) WHERE ended_at IS NULL;
+  `,
 ];
 
 /** SQLite データベースを開き、未適用のマイグレーションを実行する（":memory:" も指定可） */

@@ -210,13 +210,15 @@ function parseTaskIds(value) {
   return [...new Set(value)];
 }
 
-function toTask(row) {
+function toTask(row, sessions = []) {
   return {
     id: row.id,
     text: row.text,
     completed: Boolean(row.completed),
     createdAt: row.created_at,
     dueDate: row.due_date || null,
+    // 作業記録（開始・終了のミリ秒）。進行中は endedAt が null
+    sessions: sessions.map((s) => ({ startedAt: s.started_at, endedAt: s.ended_at })),
   };
 }
 
@@ -320,6 +322,16 @@ function createApp({
     updateTaskText: db.prepare("UPDATE tasks SET text = ? WHERE id = ? AND user_id = ?"),
     updateTaskCompleted: db.prepare("UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?"),
     updateTaskDueDate: db.prepare("UPDATE tasks SET due_date = ? WHERE id = ? AND user_id = ?"),
+    listSessions: db.prepare(`
+      SELECT s.task_id, s.started_at, s.ended_at FROM task_sessions s
+      JOIN tasks t ON t.id = s.task_id WHERE t.user_id = ? ORDER BY s.started_at, s.id
+    `),
+    listTaskSessions: db.prepare(
+      "SELECT task_id, started_at, ended_at FROM task_sessions WHERE task_id = ? ORDER BY started_at, id"
+    ),
+    openSession: db.prepare("SELECT id FROM task_sessions WHERE task_id = ? AND ended_at IS NULL"),
+    insertSession: db.prepare("INSERT INTO task_sessions (task_id, started_at) VALUES (?, ?)"),
+    closeSession: db.prepare("UPDATE task_sessions SET ended_at = ? WHERE task_id = ? AND ended_at IS NULL"),
     deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND user_id = ? AND completed = 1"),
     deleteCompletedTasks: db.prepare("DELETE FROM tasks WHERE user_id = ? AND completed = 1"),
   };
@@ -600,7 +612,7 @@ function createApp({
     const dueDate = parseDueDate(body.dueDate);
     const id = crypto.randomUUID();
     stmts.insertTask.run(id, user.id, text, 0, Date.now(), dueDate);
-    sendJson(res, 201, { task: toTask(stmts.findTask.get(id, user.id)) });
+    sendJson(res, 201, { task: findTaskDto(id, user.id) });
   }
 
   /** ブラウザの localStorage に残っていた以前のタスクをアカウントに取り込む */
@@ -637,7 +649,16 @@ function createApp({
   }
 
   function listTasks(userId) {
-    return stmts.listTasks.all(userId).map(toTask);
+    const byTask = new Map();
+    for (const s of stmts.listSessions.all(userId)) {
+      if (!byTask.has(s.task_id)) byTask.set(s.task_id, []);
+      byTask.get(s.task_id).push(s);
+    }
+    return stmts.listTasks.all(userId).map((row) => toTask(row, byTask.get(row.id)));
+  }
+
+  function findTaskDto(id, userId) {
+    return toTask(stmts.findTask.get(id, userId), stmts.listTaskSessions.all(id));
   }
 
   /**
@@ -649,8 +670,11 @@ function createApp({
     const hasText = Object.prototype.hasOwnProperty.call(body, "text");
     const hasCompleted = body.completed !== undefined;
     const hasDueDate = Object.prototype.hasOwnProperty.call(body, "dueDate");
+    // timer: "start" で作業開始、"end" で作業終了。時刻はサーバーが記録する
+    const hasTimer = body.timer !== undefined;
     // どれも来ていない更新は、何をしたいのか決まらないので受け付けない
-    if (!hasText && !hasCompleted && !hasDueDate) throw invalidRequest();
+    if (!hasText && !hasCompleted && !hasDueDate && !hasTimer) throw invalidRequest();
+    if (hasTimer && body.timer !== "start" && body.timer !== "end") throw invalidRequest();
     if (hasCompleted && typeof body.completed !== "boolean") throw invalidRequest();
 
     let changed = 0;
@@ -664,8 +688,20 @@ function createApp({
       // null を渡せば期日を外せる
       changed += stmts.updateTaskDueDate.run(parseDueDate(body.dueDate), id, user.id).changes;
     }
+    if (hasTimer) {
+      if (!stmts.findTask.get(id, user.id)) throw new HttpError(404, "タスクが見つかりません");
+      const running = Boolean(stmts.openSession.get(id));
+      if (body.timer === "start") {
+        if (running) throw new HttpError(409, "すでに開始しています", { code: "already_started" });
+        stmts.insertSession.run(id, Date.now());
+      } else {
+        if (!running) throw new HttpError(409, "開始していません", { code: "not_started" });
+        stmts.closeSession.run(Date.now(), id);
+      }
+      changed += 1;
+    }
     if (changed === 0) throw new HttpError(404, "タスクが見つかりません");
-    sendJson(res, 200, { task: toTask(stmts.findTask.get(id, user.id)) });
+    sendJson(res, 200, { task: findTaskDto(id, user.id) });
   }
 
   /**
