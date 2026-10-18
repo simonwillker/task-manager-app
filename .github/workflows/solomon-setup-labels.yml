@@ -1,0 +1,31 @@
+# 一次性创建 Solomon 使用的标签。在 Actions 页面手动运行。
+name: Solomon setup labels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or update labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          create() {
+            gh label create "$1" --repo "$REPO" --color "$2" --description "$3" --force
+          }
+          create "solomon"         "5319e7" "交给 Solomon 处理的任务"
+          create "model:claude"    "d97757" "由 Claude 执行（不打模型标签时的默认）"
+          create "model:chatgpt"   "10a37f" "由 ChatGPT（Codex）执行"
+          create "mode:review"     "fbca04" "完成后由另一方评审（第二阶段）"
+          create "mode:compare"    "fbca04" "两方各自产出后对比（第二阶段）"
+          create "out:drive"       "1d76db" "文档成果同步到 Google Drive（第二阶段）"
+          create "status:running"  "c5def5" "执行中"
+          create "status:done"     "0e8a16" "已完成"
+          create "status:failed"   "b60205" "执行失败"
+          create "status:stopped"  "cccccc" "已停止"
