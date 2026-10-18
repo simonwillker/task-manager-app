@@ -73,6 +73,7 @@
   const editForm = $("edit-form");
   const editText = $("edit-text");
   const editDue = $("edit-due");
+  const editComment = $("edit-comment");
   const editError = $("edit-error");
   const editSave = $("edit-save");
   const editCancel = $("edit-cancel");
@@ -558,6 +559,7 @@
     editingId = task.id;
     editText.value = task.text;
     editDue.value = task.dueDate || "";
+    editComment.value = task.comment || "";
     showMessage(editError, "");
     editDialog.showModal();
   }
@@ -567,11 +569,12 @@
     if (editDialog.open) editDialog.close();
   }
 
-  async function saveEdit(id, text, dueDate) {
+  async function saveEdit(id, text, dueDate, comment) {
     try {
       const data = await api("PATCH", `/api/tasks/${encodeURIComponent(id)}`, {
         text,
         dueDate: dueDate || null,
+        comment,
       });
       tasks = tasks.map((t) => (t.id === id ? data.task : t));
       afterChange();
@@ -590,7 +593,7 @@
     const id = editingId;
     if (!id) return closeEditDialog();
     submitForm(editSave, editError, async () => {
-      await saveEdit(id, editText.value.trim(), editDue.value);
+      await saveEdit(id, editText.value.trim(), editDue.value, editComment.value);
       closeEditDialog();
     });
   });

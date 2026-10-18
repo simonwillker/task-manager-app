@@ -15,6 +15,7 @@
   const STORAGE_KEY = "taskManagerApp.tasks";
   const DELETE_STATE_KEY = "taskManagerApp.deleteState";
   const MAX_TASK_LENGTH = 200;
+  const MAX_COMMENT_LENGTH = 2000;
   // サーバー版の MAX_IMPORT_TASKS と同じ
   const MAX_IMPORT_TASKS = 1000;
   // サーバー版の MAX_BULK_DELETE_IDS と同じ
@@ -62,6 +63,7 @@
       completed: task.completed === true,
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : 0,
       dueDate: isValidDueDate(task.dueDate) ? task.dueDate : null,
+      comment: typeof task.comment === "string" ? task.comment : "",
       sessions: normalizeSessions(task.sessions),
     };
   }
@@ -105,6 +107,31 @@
     const [y, m, d] = value.split("-").map(Number);
     const date = new Date(Date.UTC(y, m - 1, d));
     return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }
+
+  function parseComment(value) {
+    if (value === undefined || value === null) return "";
+    if (typeof value !== "string") fail(400, "リクエストの形式が正しくありません");
+    if (value.length > MAX_COMMENT_LENGTH) fail(400, `コメントは ${MAX_COMMENT_LENGTH} 文字以内で入力してください`);
+    return value;
+  }
+
+  function formatDuration(ms) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
+  }
+
+  /** 終了時のコメント追記。server/app.js の appendWorkTime と同じ処理 */
+  function appendWorkTime(comment, closedDurations) {
+    const lines = comment.split("\n");
+    while (lines.length && (lines[lines.length - 1] === "" || lines[lines.length - 1].startsWith("合計: "))) {
+      lines.pop();
+    }
+    const last = closedDurations[closedDurations.length - 1];
+    lines.push(`${closedDurations.length}回目: ${formatDuration(last)}`);
+    lines.push(`合計: ${formatDuration(closedDurations.reduce((a, b) => a + b, 0))}`);
+    return lines.join("\n");
   }
 
   function parseDueDate(value) {
@@ -208,6 +235,7 @@
           completed: item.completed === true,
           createdAt: Number.isFinite(createdAt) && createdAt > 0 && createdAt <= now ? createdAt : now,
           dueDate: isValidDueDate(item.dueDate) ? item.dueDate : null,
+          comment: "",
           sessions: [],
         });
       }
@@ -243,7 +271,7 @@
       if (method === "POST") {
         const text = parseTaskText(body?.text);
         const dueDate = parseDueDate(body?.dueDate);
-        const task = { id: makeId(), text, completed: false, createdAt: Date.now(), dueDate, sessions: [] };
+        const task = { id: makeId(), text, completed: false, createdAt: Date.now(), dueDate, comment: "", sessions: [] };
         const tasks = readTasks();
         tasks.push(task);
         writeTasks(tasks);
@@ -262,8 +290,9 @@
         const hasText = body && Object.prototype.hasOwnProperty.call(body, "text");
         const hasCompleted = body && Object.prototype.hasOwnProperty.call(body, "completed");
         const hasDueDate = body && Object.prototype.hasOwnProperty.call(body, "dueDate");
+        const hasComment = body && Object.prototype.hasOwnProperty.call(body, "comment");
         const hasTimer = body && body.timer !== undefined;
-        if (!hasText && !hasCompleted && !hasDueDate && !hasTimer) fail(400, "変更する内容がありません");
+        if (!hasText && !hasCompleted && !hasDueDate && !hasComment && !hasTimer) fail(400, "変更する内容がありません");
         if (hasTimer && body.timer !== "start" && body.timer !== "end") fail(400, "リクエストの形式が正しくありません");
         if (index === -1) fail(404, "タスクが見つかりません");
 
@@ -275,6 +304,10 @@
           } else {
             if (!open) fail(409, "開始していません", "not_started");
             open.endedAt = Date.now();
+            const durations = tasks[index].sessions
+              .filter((s) => s.endedAt !== null)
+              .map((s) => s.endedAt - s.startedAt);
+            tasks[index].comment = appendWorkTime(tasks[index].comment, durations);
           }
         }
 
@@ -284,6 +317,7 @@
           tasks[index].completed = body.completed;
         }
         if (hasDueDate) tasks[index].dueDate = parseDueDate(body.dueDate);
+        if (hasComment) tasks[index].comment = parseComment(body.comment);
 
         writeTasks(tasks);
         return { task: tasks[index] };
