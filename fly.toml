@@ -1,41 +1,39 @@
-# Fly.io の設定。main への push で GitHub Actions から `flyctl deploy` される
-# app 名を変える場合は、APP_BASE_URL と .github/workflows/deploy.yml の URL も合わせて変更する
+# fly.toml app configuration file generated for task-manager-app-g1vgmg on 2026-10-18T04:42:08Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "simonwillker-task-manager"
-primary_region = "nrt"
+app = 'task-manager-app-g1vgmg'
+primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  NODE_ENV = "production"
-  APP_BASE_URL = "https://simonwillker-task-manager.fly.dev"
-  SECURE_COOKIES = "true"
-  # Fly.io のプロキシがクライアントの IP を入れるヘッダー（クライアント側からは偽装できない）
-  CLIENT_IP_HEADER = "fly-client-ip"
-  MAIL_TRANSPORT = "resend"
-  # RESEND_API_KEY と MAIL_FROM は `fly secrets set` で設定する
+  APP_BASE_URL = 'https://simonwillker-task-manager.fly.dev'
+  CLIENT_IP_HEADER = 'fly-client-ip'
+  MAIL_TRANSPORT = 'resend'
+  NODE_ENV = 'production'
+  SECURE_COOKIES = 'true'
 
-# SQLite のデータベースを置く永続ボリューム
 [[mounts]]
-  source = "task_data"
-  destination = "/data"
+  source = 'task_data'
+  destination = '/data'
 
 [http_service]
-  internal_port = 3000
+  internal_port = 8080
   force_https = true
-  # アクセスが無いときは停止し、アクセスが来たら自動で起動する（料金を抑える）
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
   [[http_service.checks]]
-    grace_period = "10s"
-    interval = "30s"
-    method = "GET"
-    path = "/api/health"
-    timeout = "5s"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/api/health'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '256mb'
