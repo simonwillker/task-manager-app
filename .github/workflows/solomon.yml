@@ -123,7 +123,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
-          claude_args: --max-turns 40
+          claude_args: --max-turns 100 --allowedTools "Bash(npm *),Bash(npx *),Bash(node *)"
           prompt: |
             你是 Solomon 派来的执行方，负责完成 GitHub Issue #${{ github.event.issue.number }} 中的任务。
             - 先阅读 Issue 正文和全部评论，理解任务和已有进展。
@@ -156,7 +156,7 @@ jobs:
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: number,
-              body: `Solomon：Claude 执行失败，可能是订阅用量已达上限。请稍后评论 \`/solomon 重试\`。[运行记录](${run})`,
+              body: `Solomon：Claude 没有正常结束（可能是步数超限，或订阅用量已达上限）。分支上可能已有部分成果，请先看上面的进度和运行记录；需要重来时评论 \`/solomon 重试\`。[运行记录](${run})`,
             });
 
   codex:
