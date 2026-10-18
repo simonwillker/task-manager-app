@@ -62,7 +62,16 @@
       completed: task.completed === true,
       createdAt: Number.isFinite(task.createdAt) ? task.createdAt : 0,
       dueDate: isValidDueDate(task.dueDate) ? task.dueDate : null,
+      sessions: normalizeSessions(task.sessions),
     };
+  }
+
+  /** 作業記録。壊れた行は捨てる（進行中は endedAt が null） */
+  function normalizeSessions(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((s) => s && Number.isFinite(s.startedAt) && (s.endedAt === null || Number.isFinite(s.endedAt)))
+      .map((s) => ({ startedAt: s.startedAt, endedAt: s.endedAt }));
   }
 
   function writeTasks(tasks) {
@@ -199,6 +208,7 @@
           completed: item.completed === true,
           createdAt: Number.isFinite(createdAt) && createdAt > 0 && createdAt <= now ? createdAt : now,
           dueDate: isValidDueDate(item.dueDate) ? item.dueDate : null,
+          sessions: [],
         });
       }
       writeTasks(tasks);
@@ -233,7 +243,7 @@
       if (method === "POST") {
         const text = parseTaskText(body?.text);
         const dueDate = parseDueDate(body?.dueDate);
-        const task = { id: makeId(), text, completed: false, createdAt: Date.now(), dueDate };
+        const task = { id: makeId(), text, completed: false, createdAt: Date.now(), dueDate, sessions: [] };
         const tasks = readTasks();
         tasks.push(task);
         writeTasks(tasks);
@@ -252,8 +262,21 @@
         const hasText = body && Object.prototype.hasOwnProperty.call(body, "text");
         const hasCompleted = body && Object.prototype.hasOwnProperty.call(body, "completed");
         const hasDueDate = body && Object.prototype.hasOwnProperty.call(body, "dueDate");
-        if (!hasText && !hasCompleted && !hasDueDate) fail(400, "変更する内容がありません");
+        const hasTimer = body && body.timer !== undefined;
+        if (!hasText && !hasCompleted && !hasDueDate && !hasTimer) fail(400, "変更する内容がありません");
+        if (hasTimer && body.timer !== "start" && body.timer !== "end") fail(400, "リクエストの形式が正しくありません");
         if (index === -1) fail(404, "タスクが見つかりません");
+
+        if (hasTimer) {
+          const open = tasks[index].sessions.find((s) => s.endedAt === null);
+          if (body.timer === "start") {
+            if (open) fail(409, "すでに開始しています", "already_started");
+            tasks[index].sessions.push({ startedAt: Date.now(), endedAt: null });
+          } else {
+            if (!open) fail(409, "開始していません", "not_started");
+            open.endedAt = Date.now();
+          }
+        }
 
         if (hasText) tasks[index].text = parseTaskText(body.text);
         if (hasCompleted) {

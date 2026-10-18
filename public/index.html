@@ -170,6 +170,7 @@
       </footer>
 
       <div class="data-actions">
+        <button type="button" id="open-history" class="link-btn">学習履歴を見る</button>
         <button type="button" id="export-tasks" class="link-btn">タスクを書き出す</button>
         <button type="button" id="import-tasks" class="link-btn">タスクを読み込む</button>
       </div>
@@ -203,6 +204,21 @@
     </dialog>
 
     <!-- 削除の確認（合言葉） -->
+    <!-- 学習履歴。選んだ日に「開始」した作業を、開始・終了の時刻つきで一覧する -->
+    <dialog id="history-dialog" class="delete-dialog">
+      <h2 class="delete-title">学習履歴</h2>
+      <label class="field">
+        <span class="field-label">日付</span>
+        <input type="date" id="history-date" class="text-input due-input" />
+      </label>
+      <p id="history-total" class="delete-target"></p>
+      <ul id="history-list" class="history-list"></ul>
+      <p id="history-empty" class="empty-state" hidden>この日の記録はありません</p>
+      <div class="delete-actions">
+        <button type="button" id="history-close" class="btn btn-primary">閉じる</button>
+      </div>
+    </dialog>
+
     <!-- 書き出し。端末間で持ち運べるよう、ファイル保存と本文コピーの両方を用意する -->
     <dialog id="export-dialog" class="delete-dialog">
       <h2 class="delete-title">タスクを書き出す</h2>

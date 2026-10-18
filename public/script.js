@@ -57,6 +57,11 @@
   const list = $("task-list");
   const emptyState = $("empty-state");
   const countLabel = $("task-count");
+  const historyDialog = $("history-dialog");
+  const historyDate = $("history-date");
+  const historyTotal = $("history-total");
+  const historyList = $("history-list");
+  const historyEmpty = $("history-empty");
   const clearCompletedBtn = $("clear-completed");
   const selectModeBtn = $("select-mode");
   const selectionBar = $("selection-bar");
@@ -452,6 +457,82 @@
       if (err.status === 404) return refreshTasks();
       throw err;
     }
+  }
+
+  /** 作業の開始（"start"）か終了（"end"）を記録する。時刻は記録した側（サーバー／この端末）が決める */
+  async function setTimer(id, action) {
+    try {
+      const data = await api("PATCH", `/api/tasks/${encodeURIComponent(id)}`, { timer: action });
+      tasks = tasks.map((t) => (t.id === id ? data.task : t));
+      afterChange();
+    } catch (err) {
+      // 別の端末で先に押された・削除済みのときは、最新の状態に合わせ直す
+      if (err.status === 404 || err.status === 409) return refreshTasks();
+      throw err;
+    }
+  }
+
+  // ---- 学習履歴 ----
+
+  function runningSession(task) {
+    return (task.sessions || []).find((s) => s.endedAt === null) || null;
+  }
+
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+
+  function dateKeyOf(ms) {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+
+  function timeOf(ms) {
+    const d = new Date(ms);
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  function durationLabel(ms) {
+    const minutes = Math.floor(ms / 60000);
+    const h = Math.floor(minutes / 60);
+    return h > 0 ? `${h}時間${minutes % 60}分` : `${minutes}分`;
+  }
+
+  /** 指定の日（端末の時刻で判定）に開始した作業を、開始が早い順に返す */
+  function sessionsOnDay(key) {
+    const rows = [];
+    for (const task of tasks) {
+      for (const s of task.sessions || []) {
+        if (dateKeyOf(s.startedAt) === key) rows.push({ text: task.text, ...s });
+      }
+    }
+    return rows.sort((a, b) => a.startedAt - b.startedAt);
+  }
+
+  function renderHistory() {
+    const key = historyDate.value || todayKey();
+    const rows = sessionsOnDay(key);
+    historyList.innerHTML = "";
+    let total = 0;
+    for (const row of rows) {
+      const li = document.createElement("li");
+      li.className = "history-item";
+      const name = document.createElement("span");
+      name.className = "history-text";
+      name.textContent = row.text;
+      const time = document.createElement("span");
+      time.className = "history-time";
+      if (row.endedAt === null) {
+        time.textContent = `${timeOf(row.startedAt)} 〜 進行中`;
+      } else {
+        total += row.endedAt - row.startedAt;
+        time.textContent = `${timeOf(row.startedAt)} 〜 ${timeOf(row.endedAt)}（${durationLabel(row.endedAt - row.startedAt)}）`;
+      }
+      li.append(name, time);
+      historyList.appendChild(li);
+    }
+    historyEmpty.hidden = rows.length !== 0;
+    historyTotal.textContent = rows.length > 0 ? `合計 ${durationLabel(total)}（終了したぶん）` : "";
   }
 
   async function deleteTask(id, password) {
@@ -861,6 +942,25 @@
         li.appendChild(due);
       }
 
+      const running = runningSession(task);
+      if (running) {
+        const since = document.createElement("span");
+        since.className = "task-running";
+        since.textContent = `${timeOf(running.startedAt)} から進行中`;
+        li.appendChild(since);
+      }
+
+      // 完了済みでも、進行中のままなら終了できるようにしておく
+      if (!selectMode && (!task.completed || running)) {
+        const timerBtn = document.createElement("button");
+        timerBtn.type = "button";
+        timerBtn.className = "task-timer" + (running ? " running" : "");
+        timerBtn.textContent = running ? "終了" : "開始";
+        timerBtn.title = running ? "終了時間を記録する" : "開始時間を記録する";
+        timerBtn.addEventListener("click", () => run(() => setTimer(task.id, running ? "end" : "start")));
+        li.appendChild(timerBtn);
+      }
+
       if (selectMode) {
         // 選択できるのは完了済みだけ。未完了は押せないチェックを置いて理由を出す
         const select = document.createElement("input");
@@ -999,6 +1099,14 @@
     saveViewState();
     render();
   });
+
+  $("open-history").addEventListener("click", () => {
+    historyDate.value = todayKey();
+    renderHistory();
+    historyDialog.showModal();
+  });
+  historyDate.addEventListener("change", renderHistory);
+  $("history-close").addEventListener("click", () => historyDialog.close());
 
   loadViewState();
   dueFilterSelect.value = currentDue;

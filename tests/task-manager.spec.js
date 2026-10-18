@@ -1335,3 +1335,46 @@ test.describe("期日での絞り込みと並べ替え（サーバー版）", ()
     expect(await page.locator(".task-text").allInnerTexts()).toEqual(["期日なし"]);
   });
 });
+
+test.describe("開始・終了と学習履歴", () => {
+  test("開始・終了を記録し、再読み込みしても残り、履歴に出る", async ({ page }) => {
+    await register(page);
+    await addTasks(page, ["英語の勉強", "数学の勉強"]);
+
+    const item = page.locator(".task-item", { hasText: "英語の勉強" });
+    await item.locator(".task-timer").click();
+    await expect(item.locator(".task-running")).toBeVisible();
+    await expect(item.locator(".task-timer")).toHaveText("終了");
+
+    await page.reload();
+    await expect(item.locator(".task-running")).toBeVisible();
+
+    await item.locator(".task-timer").click();
+    await expect(item.locator(".task-running")).toHaveCount(0);
+    await expect(item.locator(".task-timer")).toHaveText("開始");
+
+    await page.click("#open-history");
+    await expect(page.locator("#history-list .history-item")).toHaveCount(1);
+    await expect(page.locator("#history-list")).toContainText("英語の勉強");
+  });
+
+  test("API: 二重の開始・開始前の終了・不正な値は受け付けない", async ({ request }) => {
+    await registerVerifiedViaApi(request);
+    const created = await request.post("/api/tasks", { headers: API_HEADERS, data: { text: "記録用" } });
+    const { task } = await created.json();
+    const url = `/api/tasks/${task.id}`;
+    const patch = (timer) => request.patch(url, { headers: API_HEADERS, data: { timer } });
+
+    expect((await patch("end")).status()).toBe(409);
+    expect((await patch("pause")).status()).toBe(400);
+
+    const started = await patch("start");
+    expect(started.status()).toBe(200);
+    expect((await started.json()).task.sessions).toEqual([{ startedAt: expect.any(Number), endedAt: null }]);
+    expect((await patch("start")).status()).toBe(409);
+
+    const ended = (await (await patch("end")).json()).task;
+    expect(ended.sessions).toHaveLength(1);
+    expect(ended.sessions[0].endedAt).toBeGreaterThanOrEqual(ended.sessions[0].startedAt);
+  });
+});

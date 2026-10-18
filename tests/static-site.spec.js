@@ -66,6 +66,35 @@ test.describe("GitHub Pages 用の静的版", () => {
     expect(stored).toHaveLength(1);
   });
 
+  test("開始・終了を記録でき、学習履歴に出る", async ({ page }) => {
+    await open(page);
+    await addTask(page, "英語の勉強");
+    await addTask(page, "数学の勉強");
+
+    const item = page.locator(".task-item", { hasText: "英語の勉強" });
+    await item.locator(".task-timer").click();
+    await expect(item.locator(".task-running")).toBeVisible();
+    await expect(item.locator(".task-timer")).toHaveText("終了");
+    // 別のタスクには影響しない
+    await expect(page.locator(".task-item", { hasText: "数学の勉強" }).locator(".task-timer")).toHaveText("開始");
+
+    await item.locator(".task-timer").click();
+    await expect(item.locator(".task-running")).toHaveCount(0);
+
+    const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || "[]"), STORAGE_KEY);
+    const english = stored.find((t) => t.text === "英語の勉強");
+    expect(english.sessions).toHaveLength(1);
+    expect(english.sessions[0].endedAt).toBeGreaterThanOrEqual(english.sessions[0].startedAt);
+
+    await page.click("#open-history");
+    await expect(page.locator("#history-list .history-item")).toHaveCount(1);
+    await expect(page.locator("#history-list")).toContainText("英語の勉強");
+
+    // 別の日には記録が無い
+    await page.fill("#history-date", "2000-01-01");
+    await expect(page.locator("#history-empty")).toBeVisible();
+  });
+
   test("期日を付けて追加でき、バッジが出る", async ({ page }) => {
     await open(page);
     const today = await page.evaluate(() => {
