@@ -14,6 +14,7 @@ const VERIFY_EMAIL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 時間
 const RESET_PASSWORD_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 時間
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_TASK_LENGTH = 200;
+const MAX_COMMENT_LENGTH = 2000;
 const MAX_IMPORT_TASKS = 1000;
 const MAX_BULK_DELETE_IDS = 1000;
 const MIN_PASSWORD_LENGTH = 8;
@@ -174,6 +175,37 @@ function parseTaskText(value) {
   return text;
 }
 
+function parseComment(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw invalidRequest();
+  if (value.length > MAX_COMMENT_LENGTH) {
+    throw new HttpError(400, `コメントは ${MAX_COMMENT_LENGTH} 文字以内で入力してください`);
+  }
+  return value;
+}
+
+function formatDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(total / 3600))}:${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
+}
+
+/**
+ * 「終了」を押したときのコメント追記。今回の作業時間を「N回目: HH:MM:SS」の行として足し、
+ * 最後の行を「合計: HH:MM:SS」（終了済みの全回の合計）に置き換える。
+ * public/localBackend.js の appendWorkTime と同じ処理。
+ */
+function appendWorkTime(comment, closedDurations) {
+  const lines = comment.split("\n");
+  while (lines.length && (lines[lines.length - 1] === "" || lines[lines.length - 1].startsWith("合計: "))) {
+    lines.pop();
+  }
+  const last = closedDurations[closedDurations.length - 1];
+  lines.push(`${closedDurations.length}回目: ${formatDuration(last)}`);
+  lines.push(`合計: ${formatDuration(closedDurations.reduce((a, b) => a + b, 0))}`);
+  return lines.join("\n");
+}
+
 /**
  * 期日は "YYYY-MM-DD" のみ受け付ける。未指定・空文字は「期日なし」。
  * 実在する日付かまで確かめる（2026-02-31 のような値を弾く）。
@@ -217,6 +249,7 @@ function toTask(row, sessions = []) {
     completed: Boolean(row.completed),
     createdAt: row.created_at,
     dueDate: row.due_date || null,
+    comment: row.comment || "",
     // 作業記録（開始・終了のミリ秒）。進行中は endedAt が null
     sessions: sessions.map((s) => ({ startedAt: s.started_at, endedAt: s.ended_at })),
   };
@@ -312,16 +345,17 @@ function createApp({
     deleteExpiredEmailTokens: db.prepare("DELETE FROM email_tokens WHERE expires_at <= ?"),
 
     listTasks: db.prepare(`
-      SELECT id, text, completed, created_at, due_date FROM tasks
+      SELECT id, text, completed, created_at, due_date, comment FROM tasks
       WHERE user_id = ? ORDER BY created_at DESC, rowid DESC
     `),
-    findTask: db.prepare("SELECT id, text, completed, created_at, due_date FROM tasks WHERE id = ? AND user_id = ?"),
+    findTask: db.prepare("SELECT id, text, completed, created_at, due_date, comment FROM tasks WHERE id = ? AND user_id = ?"),
     insertTask: db.prepare(
       "INSERT INTO tasks (id, user_id, text, completed, created_at, due_date) VALUES (?, ?, ?, ?, ?, ?)"
     ),
     updateTaskText: db.prepare("UPDATE tasks SET text = ? WHERE id = ? AND user_id = ?"),
     updateTaskCompleted: db.prepare("UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?"),
     updateTaskDueDate: db.prepare("UPDATE tasks SET due_date = ? WHERE id = ? AND user_id = ?"),
+    updateTaskComment: db.prepare("UPDATE tasks SET comment = ? WHERE id = ? AND user_id = ?"),
     listSessions: db.prepare(`
       SELECT s.task_id, s.started_at, s.ended_at FROM task_sessions s
       JOIN tasks t ON t.id = s.task_id WHERE t.user_id = ? ORDER BY s.started_at, s.id
@@ -670,10 +704,11 @@ function createApp({
     const hasText = Object.prototype.hasOwnProperty.call(body, "text");
     const hasCompleted = body.completed !== undefined;
     const hasDueDate = Object.prototype.hasOwnProperty.call(body, "dueDate");
+    const hasComment = Object.prototype.hasOwnProperty.call(body, "comment");
     // timer: "start" で作業開始、"end" で作業終了。時刻はサーバーが記録する
     const hasTimer = body.timer !== undefined;
     // どれも来ていない更新は、何をしたいのか決まらないので受け付けない
-    if (!hasText && !hasCompleted && !hasDueDate && !hasTimer) throw invalidRequest();
+    if (!hasText && !hasCompleted && !hasDueDate && !hasComment && !hasTimer) throw invalidRequest();
     if (hasTimer && body.timer !== "start" && body.timer !== "end") throw invalidRequest();
     if (hasCompleted && typeof body.completed !== "boolean") throw invalidRequest();
 
@@ -688,6 +723,9 @@ function createApp({
       // null を渡せば期日を外せる
       changed += stmts.updateTaskDueDate.run(parseDueDate(body.dueDate), id, user.id).changes;
     }
+    if (hasComment) {
+      changed += stmts.updateTaskComment.run(parseComment(body.comment), id, user.id).changes;
+    }
     if (hasTimer) {
       if (!stmts.findTask.get(id, user.id)) throw new HttpError(404, "タスクが見つかりません");
       const running = Boolean(stmts.openTaskSession.get(id));
@@ -697,6 +735,13 @@ function createApp({
       } else {
         if (!running) throw new HttpError(409, "開始していません", { code: "not_started" });
         stmts.closeTaskSession.run(Date.now(), id);
+        // 終了済みの全回の作業時間から、コメントに今回ぶんと合計を書き足す
+        const durations = stmts.listTaskSessions
+          .all(id)
+          .filter((s) => s.ended_at !== null)
+          .map((s) => s.ended_at - s.started_at);
+        const current = stmts.findTask.get(id, user.id).comment || "";
+        stmts.updateTaskComment.run(appendWorkTime(current, durations), id, user.id);
       }
       changed += 1;
     }

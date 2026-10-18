@@ -66,6 +66,24 @@ test.describe("GitHub Pages 用の静的版", () => {
     expect(stored).toHaveLength(1);
   });
 
+  test("終了するたびにコメントへ作業時間と合計が追記され、編集画面で見られる", async ({ page }) => {
+    await open(page);
+    await addTask(page, "英語の勉強");
+
+    const item = page.locator(".task-item", { hasText: "英語の勉強" });
+    for (let i = 0; i < 2; i++) {
+      await item.locator(".task-timer").click();
+      await expect(item.locator(".task-timer")).toHaveText("終了");
+      await item.locator(".task-timer").click();
+      await expect(item.locator(".task-timer")).toHaveText("開始");
+    }
+
+    await item.locator(".task-edit").click();
+    await expect(page.locator("#edit-comment")).toHaveValue(
+      /^1回目: \d{2}:\d{2}:\d{2}\n2回目: \d{2}:\d{2}:\d{2}\n合計: \d{2}:\d{2}:\d{2}$/
+    );
+  });
+
   test("開始・終了を記録でき、学習履歴に出る", async ({ page }) => {
     await open(page);
     await addTask(page, "英語の勉強");
