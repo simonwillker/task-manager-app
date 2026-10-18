@@ -1,0 +1,192 @@
+# Solomon 调度工作流
+# 读取 Issue 上的标签和 /solomon 指令，把任务交给 Claude（Claude Code Action）或 ChatGPT（Codex）。
+name: Solomon
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  route:
+    # 评论事件只处理以 /solomon 开头的评论，避免为普通评论启动运行器
+    if: >-
+      github.event_name == 'issues' ||
+      startsWith(github.event.comment.body, '/solomon')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    outputs:
+      action: ${{ steps.route.outputs.action }}
+      model: ${{ steps.route.outputs.model }}
+      instruction: ${{ steps.route.outputs.instruction }}
+    steps:
+      - name: Decide what to do
+        id: route
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = issue.labels.map(l => l.name);
+            const skip = reason => {
+              core.info(`skip: ${reason}`);
+              core.setOutput('action', 'skip');
+            };
+
+            if (!labels.includes('solomon')) return skip('issue has no solomon label');
+
+            // 模型：标签优先，其次是 Issue 模板中的「执行模型」，都没有则默认 Claude
+            let model = 'claude';
+            const fromTemplate = (issue.body || '').match(/###\s*执行模型\s+(Claude|ChatGPT)/i);
+            if (fromTemplate) model = fromTemplate[1].toLowerCase();
+            if (labels.includes('model:chatgpt')) model = 'chatgpt';
+            if (labels.includes('model:claude')) model = 'claude';
+
+            let action = 'run';
+            let instruction = '';
+
+            if (context.eventName === 'issues') {
+              const added = context.payload.label.name;
+              const ageSeconds = (Date.now() - Date.parse(issue.created_at)) / 1000;
+              if (added === 'solomon') {
+                // 新任务
+              } else if (added.startsWith('model:') && ageSeconds > 120) {
+                // 已有任务更换模型标签 = 切换执行方
+                model = added.slice('model:'.length);
+                instruction = '用户已把执行方切换为你。请先阅读本 Issue 和相关 PR 中已有的进展，再继续完成任务。';
+              } else {
+                // 新建 Issue 时每个标签都会触发一次 labeled，只按 solomon 标签启动一次
+                return skip(`label ${added} does not start a run`);
+              }
+            } else {
+              const comment = context.payload.comment;
+              const trusted = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+              if (!trusted.includes(comment.author_association)) {
+                return skip(`comment author is ${comment.author_association}`);
+              }
+              const text = comment.body.replace(/^\/solomon\b/, '').trim();
+              if (text === 'stop') {
+                action = 'stop';
+              } else if (!text) {
+                return skip('empty /solomon command');
+              } else {
+                instruction = text;
+              }
+            }
+
+            if (!['claude', 'chatgpt'].includes(model)) return skip(`unknown model ${model}`);
+
+            core.setOutput('action', action);
+            core.setOutput('model', model);
+            core.setOutput('instruction', instruction);
+
+            const number = issue.number;
+            const status = action === 'stop' ? 'status:stopped' : 'status:running';
+            for (const old of labels.filter(l => l.startsWith('status:'))) {
+              await github.rest.issues.removeLabel({ ...context.repo, issue_number: number, name: old }).catch(() => {});
+            }
+            await github.rest.issues.addLabels({ ...context.repo, issue_number: number, labels: [status] });
+
+            const who = model === 'claude' ? 'Claude' : 'ChatGPT（Codex）';
+            const body = action === 'stop'
+              ? 'Solomon：已停止本任务正在运行的工作。'
+              : `Solomon：已交给 **${who}** 执行。进度会更新在本 Issue 中。`;
+            await github.rest.issues.createComment({ ...context.repo, issue_number: number, body });
+
+  claude:
+    needs: route
+    if: needs.route.outputs.action == 'run' && needs.route.outputs.model == 'claude'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # 同一 Issue 同时只运行一个任务；/solomon stop 进入同一组时会取消它
+    concurrency:
+      group: solomon-issue-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          claude_args: --max-turns 40
+          prompt: |
+            你是 Solomon 派来的执行方，负责完成 GitHub Issue #${{ github.event.issue.number }} 中的任务。
+            - 先阅读 Issue 正文和全部评论，理解任务和已有进展。
+            - 遵守仓库根目录 CLAUDE.md 中的规则。
+            - 代码类成果：在新分支上实现，并把创建 PR 的链接回帖到 Issue。不要合并 PR。
+            - 文档类成果：写入 docs/ 目录。
+            - 完成后在 Issue 中用中文简要总结做了什么、成果在哪里、还有什么需要用户决定。
+
+            用户的追加指令（可能为空）：
+            ${{ needs.route.outputs.instruction }}
+
+      - name: Mark done
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const number = context.payload.issue.number;
+            await github.rest.issues.removeLabel({ ...context.repo, issue_number: number, name: 'status:running' }).catch(() => {});
+            await github.rest.issues.addLabels({ ...context.repo, issue_number: number, labels: ['status:done'] });
+
+      - name: Mark failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const number = context.payload.issue.number;
+            await github.rest.issues.removeLabel({ ...context.repo, issue_number: number, name: 'status:running' }).catch(() => {});
+            await github.rest.issues.addLabels({ ...context.repo, issue_number: number, labels: ['status:failed'] });
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: number,
+              body: `Solomon：Claude 执行失败，可能是订阅用量已达上限。请稍后评论 \`/solomon 重试\`。[运行记录](${run})`,
+            });
+
+  codex:
+    needs: route
+    if: needs.route.outputs.action == 'run' && needs.route.outputs.model == 'chatgpt'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Hand the task to Codex
+        env:
+          # Codex 可能只响应真人账户的评论；配置了 SOLOMON_PAT 时以仓库所有者身份发布
+          GH_TOKEN: ${{ secrets.SOLOMON_PAT || github.token }}
+          INSTRUCTION: ${{ needs.route.outputs.instruction }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          body="@codex 请根据本 Issue 的描述完成任务，在新分支上实现并开 PR，遵守仓库中的 AGENTS.md。"
+          if [ -n "$INSTRUCTION" ]; then
+            body="$body"$'\n\n'"追加指令：$INSTRUCTION"
+          fi
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$body"
+
+  stop:
+    needs: route
+    if: needs.route.outputs.action == 'stop'
+    runs-on: ubuntu-latest
+    # 与 claude 任务同组，进入时取消正在运行的任务
+    concurrency:
+      group: solomon-issue-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - run: echo "Stopped Solomon run for issue ${{ github.event.issue.number }}"
